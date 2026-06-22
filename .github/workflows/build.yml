@@ -1,0 +1,94 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+
+    env:
+      PROJECT_PATH: Dawn44.WinUI\Dawn44.WinUI.csproj
+      PUBLISH_DIR: Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged
+      INSTALLER_SCRIPT: installer\Dawn44Control.iss
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore
+        shell: pwsh
+        run: |
+          msbuild $env:PROJECT_PATH `
+            /restore `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:WindowsPackageType=None `
+            /m `
+            /noLogo
+
+      - name: Publish unpackaged x64
+        shell: pwsh
+        run: |
+          msbuild $env:PROJECT_PATH `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PublishProfile=unpackaged-x64 `
+            /p:WindowsPackageType=None `
+            /t:Publish `
+            /m `
+            /noLogo
+
+      - name: Archive unpackaged app
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "$env:PUBLISH_DIR\*" `
+            -DestinationPath Dawn44Control-unpackaged-x64.zip `
+            -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Locate Windows App Runtime packages
+        id: winapp_runtime
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.windowsappsdk.runtime\2.2.0\tools\MSIX\win10-x64'
+          if (!(Test-Path $packageRoot)) {
+            throw "Windows App Runtime package directory not found: $packageRoot"
+          }
+          "dir=$packageRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            /DWinAppRuntimeDir="${{ steps.winapp_runtime.outputs.dir }}" `
+            $env:INSTALLER_SCRIPT
+
+      - name: Upload unpackaged app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dawn44Control-unpackaged-x64
+          path: Dawn44Control-unpackaged-x64.zip
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dawn44Control-installer-x64
+          path: installer\Output\*.exe

@@ -1,0 +1,38 @@
+# Visual Studio / WinUI
+.vs/
+bin/
+obj/
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+*.pfx
+
+# Build and publish outputs
+AppPackages/
+**/AppPackages/
+publish/
+publish-unpackaged/
+
+# Installer outputs
+installer/Output*/
+*.exe
+
+# NuGet / package cache
+packages/
+*.nupkg
+
+# Logs and diagnostics
+*.log
+crash.log
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/

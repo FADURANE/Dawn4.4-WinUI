@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Dawn44.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Dawn44.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

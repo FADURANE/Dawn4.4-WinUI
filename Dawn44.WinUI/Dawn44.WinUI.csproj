@@ -1,0 +1,67 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Dawn44.WinUI</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <PublishProfile>win-$(Platform).pubxml</PublishProfile>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <PackageCertificateThumbprint>F0AF605942904B0743EB777B425FDC77C940B316</PackageCertificateThumbprint>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SplashScreen.scale-200.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\SplashScreen.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Square150x150Logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Square44x44Logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\StoreLogo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Wide310x150Logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
+    Tools extension to be activated for this project even if the Windows App SDK Nuget
+    package has not yet been restored.
+  -->
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1839" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.2.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.2.1" />
+  </ItemGroup>
+
+  <!--
+    Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
+    Explorer "Package and Publish" context menu entry to be enabled for this project even if
+    the Windows App SDK Nuget package has not yet been restored.
+  -->
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <!-- Publish Properties -->
+  <PropertyGroup>
+    <PublishReadyToRun>False</PublishReadyToRun>
+    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
+    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">False</PublishTrimmed>
+  </PropertyGroup>
+</Project>
+
+

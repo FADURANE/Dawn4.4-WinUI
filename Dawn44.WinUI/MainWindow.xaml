@@ -1,0 +1,289 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dawn44.WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Dawn4.4 Control">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="RootGrid">
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FFF7F0E7" Offset="0" />
+                <GradientStop Color="#FFEAF3F1" Offset="0.48" />
+                <GradientStop Color="#FFDDE7F4" Offset="1" />
+            </LinearGradientBrush>
+        </Grid.Background>
+
+        <Image x:Name="CustomBackgroundImage"
+               Stretch="Uniform"
+               Opacity="0.42"
+               Visibility="Collapsed"
+               RenderTransformOrigin="0.5,0.5">
+            <Image.RenderTransform>
+                <CompositeTransform x:Name="CustomBackgroundTransform" />
+            </Image.RenderTransform>
+        </Image>
+        <Rectangle Fill="#44FFF7F0" />
+
+        <ScrollViewer Padding="24,24,24,22" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="14">
+                <Grid Margin="2,0,2,8">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Dawn 4.4" FontSize="34" FontWeight="SemiBold" Foreground="#202326" />
+                        <TextBlock x:Name="SubtitleText" Text="Moondrop USB DAC Control" FontSize="13" Foreground="#7A4F4A44" />
+                    </StackPanel>
+                    <Button x:Name="SettingsButton"
+                            Content="Settings"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,30,20,0"
+                            Padding="16,8"
+                            CornerRadius="16"
+                            BorderThickness="1"
+                            BorderBrush="#66FFFFFF"
+                            Click="SettingsButton_Click">
+                        <Button.Background>
+                            <AcrylicBrush TintColor="#FFF7F0E8" TintOpacity="0.72" TintLuminosityOpacity="0.82" />
+                        </Button.Background>
+                    </Button>
+                </Grid>
+
+                <Border CornerRadius="24" Padding="20" BorderThickness="1" BorderBrush="#66FFFFFF">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="#FFF7F0E8" TintOpacity="0.74" TintLuminosityOpacity="0.78" />
+                    </Border.Background>
+                    <StackPanel Spacing="16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock x:Name="VolumeTitleText" Text="Volume" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock x:Name="VolumeSubtitleText" Text="Live device volume" FontSize="12" Foreground="#8A4F4A44" />
+                            </StackPanel>
+                            <TextBlock x:Name="VolumeText" Grid.Column="1" Text="--" FontSize="34" FontWeight="SemiBold" Foreground="#2D3238" />
+                        </Grid>
+                        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="60" StepFrequency="1" TickFrequency="10" ValueChanged="VolumeSlider_ValueChanged" />
+                    </StackPanel>
+                </Border>
+
+                <Border CornerRadius="24" Padding="20" BorderThickness="1" BorderBrush="#66FFFFFF">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="#FFF3EFE9" TintOpacity="0.70" TintLuminosityOpacity="0.78" />
+                    </Border.Background>
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="FilterTitleText" Text="Filter" FontSize="18" FontWeight="SemiBold" />
+                        <ComboBox x:Name="FilterBox" HorizontalAlignment="Stretch" SelectionChanged="FilterBox_SelectionChanged">
+                            <ComboBoxItem x:Name="FilterFastLowLatencyItem" Content="Fast Roll-Off Low Latency" Tag="0" />
+                            <ComboBoxItem x:Name="FilterFastPhaseItem" Content="Fast Roll-Off Phase Compensated" Tag="1" />
+                            <ComboBoxItem x:Name="FilterSlowLowLatencyItem" Content="Slow Roll-Off Low Latency" Tag="2" />
+                            <ComboBoxItem x:Name="FilterSlowPhaseItem" Content="Slow Roll-Off Phase Compensated" Tag="3" />
+                            <ComboBoxItem x:Name="FilterNosItem" Content="Non-Oversampling" Tag="4" />
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+
+                <Border CornerRadius="24" Padding="20" BorderThickness="1" BorderBrush="#66FFFFFF">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="#FFF0F5F1" TintOpacity="0.70" TintLuminosityOpacity="0.78" />
+                    </Border.Background>
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="GainTitleText" Text="Gain" FontSize="18" FontWeight="SemiBold" />
+                        <RadioButtons x:Name="GainButtons" SelectionChanged="GainButtons_SelectionChanged">
+                            <x:String>Low</x:String>
+                            <x:String>High</x:String>
+                        </RadioButtons>
+                    </StackPanel>
+                </Border>
+
+                <Border CornerRadius="24" Padding="20" BorderThickness="1" BorderBrush="#66FFFFFF">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="#FFEFF4FA" TintOpacity="0.70" TintLuminosityOpacity="0.78" />
+                    </Border.Background>
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Name="LedTitleText" Text="LED" FontSize="18" FontWeight="SemiBold" />
+                        <RadioButtons x:Name="LedButtons" SelectionChanged="LedButtons_SelectionChanged">
+                            <x:String>On</x:String>
+                            <x:String>Temporary Off</x:String>
+                            <x:String>Off</x:String>
+                        </RadioButtons>
+                    </StackPanel>
+                </Border>
+
+                <Border CornerRadius="22" Padding="14" BorderThickness="1" BorderBrush="#66FFFFFF">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="#FFFFFFFF" TintOpacity="0.64" TintLuminosityOpacity="0.82" />
+                    </Border.Background>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <InfoBar x:Name="StatusBar" IsOpen="True" Severity="Informational" Title="Ready" Message="Reading Dawn 4.4 state..." />
+                        <Button x:Name="RefreshButton" Grid.Column="1" Content="Refresh" VerticalAlignment="Center" Click="RefreshButton_Click" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid x:Name="SettingsOverlay" Visibility="Collapsed" Background="#66000000">
+            <Border Width="380" Padding="22" CornerRadius="24" BorderThickness="1" BorderBrush="#80FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border.Background>
+                    <AcrylicBrush TintColor="#FFF9F5EF" TintOpacity="0.86" TintLuminosityOpacity="0.90" />
+                </Border.Background>
+                <StackPanel Spacing="16">
+                    <Grid>
+                        <TextBlock x:Name="SettingsTitleText" Text="Settings" FontSize="24" FontWeight="SemiBold" />
+                        <Button x:Name="CloseSettingsButton" Content="Close" HorizontalAlignment="Right" Click="CloseSettingsButton_Click" />
+                    </Grid>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="LanguageTitleText" Text="Language" FontWeight="SemiBold" />
+                        <ComboBox x:Name="LanguageBox" SelectionChanged="LanguageBox_SelectionChanged">
+                            <ComboBoxItem Content="English" Tag="en" />
+                            <ComboBoxItem Content="中文" Tag="zh" />
+                        </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="CloseBehaviorTitleText" Text="Close button behavior" FontWeight="SemiBold" />
+                        <ComboBox x:Name="CloseBehaviorBox" SelectionChanged="CloseBehaviorBox_SelectionChanged">
+                            <ComboBoxItem x:Name="CloseAskItem" Content="Ask every time" Tag="Ask" />
+                            <ComboBoxItem x:Name="CloseTrayItem" Content="Minimize to tray" Tag="Tray" />
+                            <ComboBoxItem x:Name="CloseExitItem" Content="Exit app" Tag="Exit" />
+                        </ComboBox>
+                        <Button x:Name="ClearCloseDefaultButton" Content="Clear default choice" Click="ClearCloseDefaultButton_Click" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="StartupTitleText" Text="Startup" FontWeight="SemiBold" />
+                        <ToggleSwitch x:Name="StartupSwitch"
+                                      Header="Start with Windows"
+                                      OnContent="Enabled"
+                                      OffContent="Disabled"
+                                      Toggled="StartupSwitch_Toggled" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="WindowBackgroundTitleText" Text="Window background" FontWeight="SemiBold" />
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="ChooseBackgroundButton" Content="Choose image" Click="ChooseBackgroundButton_Click" />
+                            <Button x:Name="ClearBackgroundButton" Grid.Column="1" Content="Clear" Click="ClearBackgroundButton_Click" />
+                        </Grid>
+                        <TextBlock x:Name="BackgroundPathText" Text="No custom background" Foreground="#8A4F4A44" TextWrapping="Wrap" />
+                        <Button x:Name="AdjustBackgroundButton"
+                                Content="Adjust image"
+                                HorizontalAlignment="Left"
+                                Click="AdjustBackgroundButton_Click" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="WindowSizeTitleText" Text="Window size" FontWeight="SemiBold" />
+                        <ToggleSwitch x:Name="ResizeLockSwitch"
+                                      Header="Lock window resizing"
+                                      OnContent="Locked"
+                                      OffContent="Unlocked"
+                                      Toggled="ResizeLockSwitch_Toggled" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="ShortcutsTitleText" Text="Global shortcuts" FontWeight="SemiBold" />
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ShortcutUpLabelText" Text="Volume +1" VerticalAlignment="Center" Foreground="#8A4F4A44" />
+                            <Button x:Name="ShortcutUpButton"
+                                    Grid.Column="1"
+                                    MinWidth="150"
+                                    Content="Ctrl + Alt + Up"
+                                    Click="ShortcutButton_Click"
+                                    KeyDown="ShortcutButton_KeyDown"
+                                    Tag="Up" />
+                        </Grid>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ShortcutDownLabelText" Text="Volume -1" VerticalAlignment="Center" Foreground="#8A4F4A44" />
+                            <Button x:Name="ShortcutDownButton"
+                                    Grid.Column="1"
+                                    MinWidth="150"
+                                    Content="Ctrl + Alt + Down"
+                                    Click="ShortcutButton_Click"
+                                    KeyDown="ShortcutButton_KeyDown"
+                                    Tag="Down" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="BackgroundAdjustPanel"
+              Visibility="Collapsed"
+              Background="#22000000">
+            <Border Width="420"
+                    Padding="18"
+                    Margin="18"
+                    CornerRadius="28"
+                    BorderThickness="1"
+                    BorderBrush="#80FFFFFF"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Bottom">
+                <Border.Background>
+                    <AcrylicBrush TintColor="#FFF9F5EF" TintOpacity="0.76" TintLuminosityOpacity="0.86" />
+                </Border.Background>
+                <StackPanel Spacing="10">
+                    <Grid>
+                        <TextBlock x:Name="BackgroundAdjustTitleText" Text="Image adjustment" FontSize="18" FontWeight="SemiBold" />
+                        <Button x:Name="DoneBackgroundAdjustmentButton"
+                                Content="Done"
+                                HorizontalAlignment="Right"
+                                Click="DoneBackgroundAdjustmentButton_Click" />
+                    </Grid>
+                    <TextBlock x:Name="BackgroundZoomText" Text="Zoom" Foreground="#8A4F4A44" />
+                    <Slider x:Name="BackgroundZoomSlider"
+                            Minimum="0.5"
+                            Maximum="2.5"
+                            StepFrequency="0.01"
+                            ValueChanged="BackgroundAdjustmentSlider_ValueChanged" />
+                    <TextBlock x:Name="BackgroundHorizontalText" Text="Horizontal position" Foreground="#8A4F4A44" />
+                    <Slider x:Name="BackgroundHorizontalSlider"
+                            Minimum="-320"
+                            Maximum="320"
+                            StepFrequency="1"
+                            ValueChanged="BackgroundAdjustmentSlider_ValueChanged" />
+                    <TextBlock x:Name="BackgroundVerticalText" Text="Vertical position" Foreground="#8A4F4A44" />
+                    <Slider x:Name="BackgroundVerticalSlider"
+                            Minimum="-640"
+                            Maximum="640"
+                            StepFrequency="1"
+                            ValueChanged="BackgroundAdjustmentSlider_ValueChanged" />
+                    <Button x:Name="ResetBackgroundAdjustmentButton"
+                            Content="Reset adjustment"
+                            HorizontalAlignment="Left"
+                            Click="ResetBackgroundAdjustmentButton_Click" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+    </Grid>
+</Window>
+
+
+
+
