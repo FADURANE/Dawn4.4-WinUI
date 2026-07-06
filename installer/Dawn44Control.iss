@@ -19,6 +19,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=Output
 OutputBaseFilename=Dawn44ControlSetup-{#MyAppVersion}-x64
+SetupIconFile=..\Dawn44.WinUI\Assets\Dawn44Control.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -27,7 +28,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 MinVersion=10.0.17763
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\Assets\Dawn44Control.ico
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -46,8 +47,8 @@ Source: "{#WinAppRuntimeDir}\Microsoft.WindowsAppRuntime.2.msix"; DestDir: "{tmp
 Type: files; Name: "{app}\resources.pri"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\Assets\Dawn44Control.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\Assets\Dawn44Control.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$ErrorActionPreference = 'Stop'; $packages = @('Microsoft.WindowsAppRuntime.Main.2.msix','Microsoft.WindowsAppRuntime.Singleton.2.msix','Microsoft.WindowsAppRuntime.DDLM.2.msix','Microsoft.WindowsAppRuntime.2.msix'); foreach ($package in $packages) {{ $path = Join-Path '{tmp}\WinAppRuntime' $package; Add-AppxPackage -Path $path -ForceApplicationShutdown }}"""; StatusMsg: "Installing Windows App Runtime 2.2..."; Flags: waituntilterminated

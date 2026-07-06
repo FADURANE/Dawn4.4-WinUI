@@ -44,6 +44,13 @@ namespace Dawn44.WinUI
         /// <param name="args">Details about the launch request and process.</param>
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
+            if (!SingleInstanceManager.TryAcquire())
+            {
+                SingleInstanceManager.NotifyExistingInstance();
+                Environment.Exit(0);
+                return;
+            }
+
             try
             {
                 _window = new MainWindow(IsTrayLaunch(args.Arguments));

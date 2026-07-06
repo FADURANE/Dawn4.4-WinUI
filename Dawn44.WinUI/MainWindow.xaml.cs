@@ -57,10 +57,15 @@ public sealed partial class MainWindow : Window
     private const uint DeviceNotifyWindowHandle = 0x00000000;
     private const int DeviceArrivalRefreshDelayMs = 900;
     private const int DeviceRemovalRefreshDelayMs = 200;
+    private const int DevBroadcastDeviceInterfaceNameOffset = 28;
     private const int SwRestore = 9;
     private const int SwShow = 5;
     private const int WmLButtonUp = 0x0202;
     private const int WmRButtonUp = 0x0205;
+    private const uint ImageIcon = 1;
+    private const int IconDefaultSize = 0;
+    private const uint LrLoadFromFile = 0x00000010;
+    private const uint LrDefaultSize = 0x00000040;
     private const int NifMessage = 0x00000001;
     private const int NifIcon = 0x00000002;
     private const int NifTip = 0x00000004;
@@ -143,6 +148,7 @@ public sealed partial class MainWindow : Window
         _hwnd = WindowNative.GetWindowHandle(this);
         _appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(_hwnd));
         _subclassProc = WindowSubclassProc;
+        TrySetAppIcon();
         ResizeWindow(DefaultWindowWidth, DefaultWindowHeight);
         PositionWindowNearRight();
         LoadSettingsUi();
@@ -464,13 +470,6 @@ public sealed partial class MainWindow : Window
         _deviceChangeRefreshCts?.Dispose();
         _deviceChangeRefreshCts = new CancellationTokenSource();
         var token = _deviceChangeRefreshCts.Token;
-
-        if (removed)
-        {
-            SetDeviceConnected(false);
-            ShowDeviceDisconnectedStatus();
-            ShowTrayNotification(Text("NotConnected"), Text("DeviceDisconnected"));
-        }
 
         _ = RefreshAfterDeviceChangeAsync(removed ? DeviceRemovalRefreshDelayMs : DeviceArrivalRefreshDelayMs, token);
     }
@@ -964,9 +963,38 @@ public sealed partial class MainWindow : Window
 
     private IntPtr GetTrayIconHandle()
     {
+        var iconPath = GetAppIconPath();
+        if (_trayIconHandle == IntPtr.Zero && System.IO.File.Exists(iconPath))
+        {
+            _trayIconHandle = LoadImage(IntPtr.Zero, iconPath, ImageIcon, IconDefaultSize, IconDefaultSize, LrLoadFromFile | LrDefaultSize);
+        }
+
         return _trayIconHandle != IntPtr.Zero
             ? _trayIconHandle
             : LoadIcon(IntPtr.Zero, new IntPtr(IdiApplication));
+    }
+
+    private static string GetAppIconPath()
+    {
+        return System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "Dawn44Control.ico");
+    }
+
+    private void TrySetAppIcon()
+    {
+        var iconPath = GetAppIconPath();
+        if (!System.IO.File.Exists(iconPath))
+        {
+            return;
+        }
+
+        try
+        {
+            _appWindow.SetIcon(iconPath);
+        }
+        catch
+        {
+            // Missing or unreadable icon assets should not stop the controller from opening.
+        }
     }
 
     private void RegisterHotkeys()
@@ -1045,7 +1073,11 @@ public sealed partial class MainWindow : Window
 
     private IntPtr WindowSubclassProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData)
     {
-        if (message == WmHotkey)
+        if (SingleInstanceManager.ShowExistingWindowMessage != 0 && message == SingleInstanceManager.ShowExistingWindowMessage)
+        {
+            DispatcherQueue.TryEnqueue(ShowFromTray);
+        }
+        else if (message == WmHotkey)
         {
             var hotkeyId = wParam.ToInt32();
             if (hotkeyId == HotkeyVolumeUp)
@@ -1080,15 +1112,21 @@ public sealed partial class MainWindow : Window
             var deviceEvent = wParam.ToInt32();
             if (deviceEvent == DbtDeviceArrival)
             {
-                DispatcherQueue.TryEnqueue(() =>
+                if (IsDawnDeviceChange(lParam))
                 {
-                    ShowStatus(InfoBarSeverity.Informational, Text("CheckingDevice"), Text("ReadingState"));
-                    QueueDeviceChangeRefresh(removed: false);
-                });
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        ShowStatus(InfoBarSeverity.Informational, Text("CheckingDevice"), Text("ReadingState"));
+                        QueueDeviceChangeRefresh(removed: false);
+                    });
+                }
             }
             else if (deviceEvent == DbtDeviceRemoveComplete)
             {
-                DispatcherQueue.TryEnqueue(() => QueueDeviceChangeRefresh(removed: true));
+                if (IsDawnDeviceChange(lParam))
+                {
+                    DispatcherQueue.TryEnqueue(() => QueueDeviceChangeRefresh(removed: true));
+                }
             }
         }
         else if (message == WmSize && wParam.ToInt32() == SizeMinimized)
@@ -1097,6 +1135,37 @@ public sealed partial class MainWindow : Window
         }
 
         return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
+
+    private static bool IsDawnDeviceChange(IntPtr lParam)
+    {
+        if (lParam == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var header = Marshal.PtrToStructure<DevBroadcastHeader>(lParam);
+            if (header.dbch_devicetype != DbtDevtypDeviceInterface || header.dbch_size <= DevBroadcastDeviceInterfaceNameOffset)
+            {
+                return false;
+            }
+
+            var name = Marshal.PtrToStringUni(IntPtr.Add(lParam, DevBroadcastDeviceInterfaceNameOffset));
+            return IsDawnDevicePath(name);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsDawnDevicePath(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path)
+            && path.Contains("vid_2fc6", StringComparison.OrdinalIgnoreCase)
+            && path.Contains("pid_f067", StringComparison.OrdinalIgnoreCase);
     }
 
     private void LoadSettingsUi()
@@ -1828,6 +1897,14 @@ public sealed partial class MainWindow : Window
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct DevBroadcastHeader
+    {
+        public int dbch_size;
+        public int dbch_devicetype;
+        public int dbch_reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct DevBroadcastDeviceInterface
     {
         public int dbcc_size;
@@ -1895,6 +1972,9 @@ public sealed partial class MainWindow : Window
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadImage(IntPtr hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr hIcon);
