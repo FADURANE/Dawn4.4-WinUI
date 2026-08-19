@@ -1310,7 +1310,7 @@ public sealed partial class MainWindow : Window
                 ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
             var cmdArgs = Environment.GetCommandLineArgs();
             var extraArgs = cmdArgs.Length > 1
-                ? string.Join(" ", cmdArgs.Skip(1))
+                ? string.Join(" ", cmdArgs, 1, cmdArgs.Length - 1)
                 : string.Empty;
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
