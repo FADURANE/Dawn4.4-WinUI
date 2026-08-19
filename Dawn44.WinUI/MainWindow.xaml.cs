@@ -128,6 +128,7 @@ public sealed partial class MainWindow : Window
     private bool _isDeviceConnected;
     private bool _hasCompletedInitialRefresh;
     private bool _startMinimizedToTray;
+    private CancellationTokenSource? _hotkeyPollCts;
     private string _language = "en";
     private HotkeyCaptureTarget _hotkeyCaptureTarget = HotkeyCaptureTarget.None;
 
@@ -1042,34 +1043,86 @@ public sealed partial class MainWindow : Window
 
     private void RegisterHotkeys()
     {
+        // Unregister legacy RegisterHotKey (kept as fallback for non-hook scenarios)
         UnregisterHotKey(_hwnd, HotkeyVolumeUp);
         UnregisterHotKey(_hwnd, HotkeyVolumeDown);
 
-        var up = GetVolumeUpHotkey();
-        var down = GetVolumeDownHotkey();
-        var upRegistered = RegisterHotKey(_hwnd, HotkeyVolumeUp, up.Modifiers, up.Vk);
-        var upError = Marshal.GetLastWin32Error();
-        var downRegistered = RegisterHotKey(_hwnd, HotkeyVolumeDown, down.Modifiers, down.Vk);
-        var downError = Marshal.GetLastWin32Error();
+        // Start GetAsyncKeyState polling — bypasses low-level keyboard hooks (e.g. EasyAntiCheat)
+        _hotkeyPollCts?.Cancel();
+        _hotkeyPollCts?.Dispose();
+        _hotkeyPollCts = new CancellationTokenSource();
+        _ = HotkeyPollLoopAsync(_hotkeyPollCts.Token);
+    }
 
-        if (!upRegistered || !downRegistered)
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private static bool IsVkDown(int vk) => (GetAsyncKeyState(vk) & unchecked((short)0x8000)) != 0;
+
+    private static bool IsHotkeyComboActive(HotkeySetting h)
+    {
+        if (h.Vk == 0) return false;
+        if (!IsVkDown((int)h.Vk)) return false;
+        if ((h.Modifiers & ModControl) != 0 && !IsVkDown(VkControl)) return false;
+        if ((h.Modifiers & ModAlt) != 0 && !IsVkDown(VkMenu)) return false;
+        if ((h.Modifiers & ModShift) != 0 && !IsVkDown(VkShift)) return false;
+        if ((h.Modifiers & ModWin) != 0 && !IsVkDown(VkLWin) && !IsVkDown(VkRWin)) return false;
+        return true;
+    }
+
+    private async Task HotkeyPollLoopAsync(CancellationToken ct)
+    {
+        const int PollMs = 15;
+        const int RepeatDelayMs = 400;
+        const int RepeatIntervalMs = 80;
+
+        bool upHeld = false, downHeld = false;
+        int upHeldMs = 0, downHeldMs = 0;
+
+        while (!ct.IsCancellationRequested)
         {
-            var failed = new List<string>();
-            if (!upRegistered)
-            {
-                failed.Add($"{Text("ShortcutUpLabel")} ({FormatHotkey(up)})");
-            }
+            try { await Task.Delay(PollMs, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
 
-            if (!downRegistered)
-            {
-                failed.Add($"{Text("ShortcutDownLabel")} ({FormatHotkey(down)})");
-            }
+            var up = GetVolumeUpHotkey();
+            var down = GetVolumeDownHotkey();
 
-            var error = !upRegistered ? upError : downError;
-            ShowStatus(
-                InfoBarSeverity.Warning,
-                Text("GlobalShortcuts"),
-                $"{Text("ShortcutRegisterFailed")}: {string.Join(", ", failed)} ({error})");
+            bool upNow = IsHotkeyComboActive(up);
+            bool downNow = IsHotkeyComboActive(down);
+
+            // Volume up
+            if (upNow)
+            {
+                if (!upHeld)
+                {
+                    upHeldMs = 0;
+                    DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(1));
+                }
+                else
+                {
+                    upHeldMs += PollMs;
+                    if (upHeldMs >= RepeatDelayMs && (upHeldMs - RepeatDelayMs) % RepeatIntervalMs < PollMs)
+                        DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(1));
+                }
+            }
+            upHeld = upNow;
+
+            // Volume down
+            if (downNow)
+            {
+                if (!downHeld)
+                {
+                    downHeldMs = 0;
+                    DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(-1));
+                }
+                else
+                {
+                    downHeldMs += PollMs;
+                    if (downHeldMs >= RepeatDelayMs && (downHeldMs - RepeatDelayMs) % RepeatIntervalMs < PollMs)
+                        DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(-1));
+                }
+            }
+            downHeld = downNow;
         }
     }
 
@@ -1100,6 +1153,9 @@ public sealed partial class MainWindow : Window
 
         UnregisterHotKey(_hwnd, HotkeyVolumeUp);
         UnregisterHotKey(_hwnd, HotkeyVolumeDown);
+        _hotkeyPollCts?.Cancel();
+        _hotkeyPollCts?.Dispose();
+        _hotkeyPollCts = null;
         RemoveWindowSubclass(_hwnd, _subclassProc, UIntPtr.Zero);
         if (_trayIconVisible)
         {
