@@ -1,5 +1,5 @@
 #define MyAppName "Dawn4.4 Control"
-#define MyAppVersion "1.0.16"
+#define MyAppVersion "1.0.17"
 #define MyAppPublisher "FADURANE"
 #define MyAppExeName "Dawn44.WinUI.exe"
 #define SourceDir "..\Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged"
