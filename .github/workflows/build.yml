@@ -57,30 +57,6 @@ jobs:
             /m `
             /noLogo
 
-      - name: Reorganize publish output
-        shell: pwsh
-        run: |
-          $pub = "$env:PUBLISH_DIR"
-          $bin = "$pub\bin"
-          New-Item -ItemType Directory -Force -Path $bin | Out-Null
-
-          # Native DLLs that must stay next to the exe
-          $nativeKeep = @('Microsoft.WindowsAppRuntime.Bootstrap.dll', 'WebView2Loader.dll')
-          Get-ChildItem "$pub\*.dll" | Where-Object { $_.Name -notin $nativeKeep } | ForEach-Object {
-              Move-Item $_.FullName "$bin\$($_.Name)" -Force
-          }
-
-          # Patch runtimeconfig.json to add additionalProbingPaths
-          $rcPath = "$pub\Dawn44.WinUI.runtimeconfig.json"
-          $rc = Get-Content $rcPath -Raw | ConvertFrom-Json
-          if (-not $rc.runtimeOptions.PSObject.Properties['additionalProbingPaths']) {
-              $rc.runtimeOptions | Add-Member -MemberType NoteProperty `
-                  -Name 'additionalProbingPaths' -Value @('./bin')
-          } else {
-              $rc.runtimeOptions.additionalProbingPaths = @('./bin')
-          }
-          $rc | ConvertTo-Json -Depth 10 | Set-Content $rcPath -Encoding UTF8
-
       - name: Archive for release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
