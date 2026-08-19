@@ -105,6 +105,7 @@ public sealed partial class MainWindow : Window
     private const string HotkeyVolumeDownVkKey = "HotkeyVolumeDownVk";
     private const string StartupEnabledKey = "StartupEnabled";
     private const string HotkeyOsdEnabledKey = "HotkeyOsdEnabled";
+    private const string RunAsAdminKey = "RunAsAdmin";
 
     private readonly DawnHidDevice _device = new();
     private readonly IntPtr _hwnd;
@@ -363,6 +364,29 @@ public sealed partial class MainWindow : Window
         SaveHotkeyOsdEnabled(HotkeyOsdSwitch.IsOn);
         ShowStatus(InfoBarSeverity.Success, Text("Settings"),
             HotkeyOsdSwitch.IsOn ? Text("HotkeyOsdEnabled") : Text("HotkeyOsdDisabled"));
+    }
+
+    private void AdminSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isLoadingSettings) return;
+
+        SaveRunAsAdmin(AdminSwitch.IsOn);
+
+        if (AdminSwitch.IsOn)
+        {
+            if (IsCurrentProcessElevated())
+            {
+                ShowStatus(InfoBarSeverity.Success, Text("Settings"), Text("RunAsAdminAlready"));
+            }
+            else
+            {
+                RestartAsAdmin();
+            }
+        }
+        else
+        {
+            ShowStatus(InfoBarSeverity.Informational, Text("Settings"), Text("RunAsAdminDisabled"));
+        }
     }
 
     private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -1206,6 +1230,7 @@ public sealed partial class MainWindow : Window
             ResizeLockSwitch.IsOn = GetResizeLocked();
             StartupSwitch.IsOn = GetStartupEnabled();
             HotkeyOsdSwitch.IsOn = GetHotkeyOsdEnabled();
+            AdminSwitch.IsOn = GetRunAsAdmin();
             BackgroundPathText.Text = GetBackgroundImageName() ?? Text("NoCustomBackground");
             AdjustBackgroundButton.Visibility = GetBackgroundImageName() is null ? Visibility.Collapsed : Visibility.Visible;
             LoadBackgroundAdjustmentUi();
@@ -1262,6 +1287,48 @@ public sealed partial class MainWindow : Window
     private static void SaveHotkeyOsdEnabled(bool enabled)
     {
         SaveSetting(HotkeyOsdEnabledKey, enabled ? "true" : "false");
+    }
+
+    private static bool GetRunAsAdmin()
+        => GetBoolSetting(RunAsAdminKey, false);
+
+    private static void SaveRunAsAdmin(bool enabled)
+        => SaveSetting(RunAsAdminKey, enabled ? "true" : "false");
+
+    private static bool IsCurrentProcessElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var principal = new System.Security.Principal.WindowsPrincipal(identity);
+        return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    private void RestartAsAdmin()
+    {
+        try
+        {
+            var exePath = Environment.ProcessPath
+                ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+            var cmdArgs = Environment.GetCommandLineArgs();
+            var extraArgs = cmdArgs.Length > 1
+                ? string.Join(" ", cmdArgs.Skip(1))
+                : string.Empty;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = extraArgs,
+                Verb = "runas",
+                UseShellExecute = true,
+            });
+            ExitApplication();
+        }
+        catch
+        {
+            // User cancelled the UAC prompt — revert toggle
+            _isLoadingSettings = true;
+            AdminSwitch.IsOn = false;
+            _isLoadingSettings = false;
+            SaveRunAsAdmin(false);
+        }
     }
 
     private static HotkeySetting GetVolumeUpHotkey()
@@ -1723,6 +1790,10 @@ public sealed partial class MainWindow : Window
         HotkeyOsdSwitch.Header = Text("HotkeyOsdHeader");
         HotkeyOsdSwitch.OnContent = Text("Enabled");
         HotkeyOsdSwitch.OffContent = Text("Disabled");
+        RunAsAdminTitleText.Text = Text("RunAsAdminTitle");
+        AdminSwitch.Header = Text("RunAsAdminHeader");
+        AdminSwitch.OnContent = Text("Enabled");
+        AdminSwitch.OffContent = Text("Disabled");
         ShortcutsTitleText.Text = Text("GlobalShortcuts");
         UpdateShortcutButtons();
 
@@ -1792,6 +1863,11 @@ public sealed partial class MainWindow : Window
             "HotkeyOsdHeader" => zh ? "快捷键调音量时显示弹窗" : "Show popup when using shortcuts",
             "HotkeyOsdEnabled" => zh ? "快捷键音量弹窗已启用。" : "Shortcut volume popup enabled.",
             "HotkeyOsdDisabled" => zh ? "快捷键音量弹窗已禁用。" : "Shortcut volume popup disabled.",
+            "RunAsAdminTitle" => zh ? "以管理员身份运行" : "Run as administrator",
+            "RunAsAdminHeader" => zh ? "以管理员权限运行，修复部分游戏中快捷键失效的问题" : "Run with admin rights to fix hotkeys in some games",
+            "RunAsAdminEnabled" => zh ? "正在以管理员身份重启..." : "Restarting as administrator...",
+            "RunAsAdminDisabled" => zh ? "下次启动将以普通权限运行。" : "Will launch without admin rights next time.",
+            "RunAsAdminAlready" => zh ? "当前已以管理员身份运行。" : "Already running as administrator.",
             "Ready" => zh ? "就绪" : "Ready",
             "ReadingState" => zh ? "正在读取 Dawn 4.4 状态..." : "Reading Dawn 4.4 state...",
             "CheckingDevice" => zh ? "正在检测设备" : "Checking device",

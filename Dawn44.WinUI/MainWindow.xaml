@@ -208,6 +208,15 @@
                     </StackPanel>
 
                     <StackPanel Spacing="8">
+                        <TextBlock x:Name="RunAsAdminTitleText" Text="Run as administrator" FontWeight="SemiBold" />
+                        <ToggleSwitch x:Name="AdminSwitch"
+                                      Header="Run with admin rights to fix hotkeys in some games"
+                                      OnContent="Enabled"
+                                      OffContent="Disabled"
+                                      Toggled="AdminSwitch_Toggled" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
                         <TextBlock x:Name="ShortcutsTitleText" Text="Global shortcuts" FontWeight="SemiBold" />
                         <Grid ColumnSpacing="10">
                             <Grid.ColumnDefinitions>
