@@ -199,6 +199,15 @@
                     </StackPanel>
 
                     <StackPanel Spacing="8">
+                        <TextBlock x:Name="HotkeyOsdTitleText" Text="Shortcut volume popup" FontWeight="SemiBold" />
+                        <ToggleSwitch x:Name="HotkeyOsdSwitch"
+                                      Header="Show popup when using shortcuts"
+                                      OnContent="Enabled"
+                                      OffContent="Disabled"
+                                      Toggled="HotkeyOsdSwitch_Toggled" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="8">
                         <TextBlock x:Name="ShortcutsTitleText" Text="Global shortcuts" FontWeight="SemiBold" />
                         <Grid ColumnSpacing="10">
                             <Grid.ColumnDefinitions>

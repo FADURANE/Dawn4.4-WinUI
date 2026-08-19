@@ -104,6 +104,7 @@ public sealed partial class MainWindow : Window
     private const string HotkeyVolumeDownModifiersKey = "HotkeyVolumeDownModifiers";
     private const string HotkeyVolumeDownVkKey = "HotkeyVolumeDownVk";
     private const string StartupEnabledKey = "StartupEnabled";
+    private const string HotkeyOsdEnabledKey = "HotkeyOsdEnabled";
 
     private readonly DawnHidDevice _device = new();
     private readonly IntPtr _hwnd;
@@ -350,6 +351,18 @@ public sealed partial class MainWindow : Window
         SaveResizeLocked(ResizeLockSwitch.IsOn);
         ApplyResizeLockFromSettings();
         ShowStatus(InfoBarSeverity.Success, Text("Settings"), ResizeLockSwitch.IsOn ? Text("WindowSizeLocked") : Text("WindowSizeUnlocked"));
+    }
+
+    private void HotkeyOsdSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isLoadingSettings)
+        {
+            return;
+        }
+
+        SaveHotkeyOsdEnabled(HotkeyOsdSwitch.IsOn);
+        ShowStatus(InfoBarSeverity.Success, Text("Settings"),
+            HotkeyOsdSwitch.IsOn ? Text("HotkeyOsdEnabled") : Text("HotkeyOsdDisabled"));
     }
 
     private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
@@ -672,7 +685,10 @@ public sealed partial class MainWindow : Window
             VolumeSlider.Value = next;
             VolumeText.Text = next.ToString();
             QueueVolumeWrite(next);
-            ShowVolumeOsd(next);
+            if (GetHotkeyOsdEnabled())
+            {
+                ShowVolumeOsd(next);
+            }
         });
     }
 
@@ -688,7 +704,10 @@ public sealed partial class MainWindow : Window
         VolumeSlider.Value = next;
         VolumeText.Text = next.ToString();
         QueueVolumeWrite(next);
-        ShowVolumeOsd(next);
+        if (GetHotkeyOsdEnabled())
+        {
+            ShowVolumeOsd(next);
+        }
     }
 
     private void ShowVolumeOsd(int volume)
@@ -1186,6 +1205,7 @@ public sealed partial class MainWindow : Window
 
             ResizeLockSwitch.IsOn = GetResizeLocked();
             StartupSwitch.IsOn = GetStartupEnabled();
+            HotkeyOsdSwitch.IsOn = GetHotkeyOsdEnabled();
             BackgroundPathText.Text = GetBackgroundImageName() ?? Text("NoCustomBackground");
             AdjustBackgroundButton.Visibility = GetBackgroundImageName() is null ? Visibility.Collapsed : Visibility.Visible;
             LoadBackgroundAdjustmentUi();
@@ -1232,6 +1252,16 @@ public sealed partial class MainWindow : Window
     private static void SaveStartupEnabled(bool enabled)
     {
         SaveSetting(StartupEnabledKey, enabled ? "true" : "false");
+    }
+
+    private static bool GetHotkeyOsdEnabled()
+    {
+        return GetBoolSetting(HotkeyOsdEnabledKey, true);
+    }
+
+    private static void SaveHotkeyOsdEnabled(bool enabled)
+    {
+        SaveSetting(HotkeyOsdEnabledKey, enabled ? "true" : "false");
     }
 
     private static HotkeySetting GetVolumeUpHotkey()
@@ -1689,6 +1719,10 @@ public sealed partial class MainWindow : Window
         StartupSwitch.Header = Text("StartWithWindows");
         StartupSwitch.OnContent = Text("Enabled");
         StartupSwitch.OffContent = Text("Disabled");
+        HotkeyOsdTitleText.Text = Text("HotkeyOsdTitle");
+        HotkeyOsdSwitch.Header = Text("HotkeyOsdHeader");
+        HotkeyOsdSwitch.OnContent = Text("Enabled");
+        HotkeyOsdSwitch.OffContent = Text("Disabled");
         ShortcutsTitleText.Text = Text("GlobalShortcuts");
         UpdateShortcutButtons();
 
@@ -1754,6 +1788,10 @@ public sealed partial class MainWindow : Window
             "ShortcutNeedsModifier" => zh ? "快捷键需要包含 Ctrl、Alt、Shift 或 Win。" : "Shortcut needs Ctrl, Alt, Shift, or Win.",
             "ShortcutUpdated" => zh ? "快捷键已更新。" : "Shortcut updated.",
             "ShortcutRegisterFailed" => zh ? "快捷键注册失败，可能已被其他程序占用" : "Shortcut registration failed, possibly already used by another app",
+            "HotkeyOsdTitle" => zh ? "快捷键音量提示" : "Shortcut volume popup",
+            "HotkeyOsdHeader" => zh ? "快捷键调音量时显示弹窗" : "Show popup when using shortcuts",
+            "HotkeyOsdEnabled" => zh ? "快捷键音量弹窗已启用。" : "Shortcut volume popup enabled.",
+            "HotkeyOsdDisabled" => zh ? "快捷键音量弹窗已禁用。" : "Shortcut volume popup disabled.",
             "Ready" => zh ? "就绪" : "Ready",
             "ReadingState" => zh ? "正在读取 Dawn 4.4 状态..." : "Reading Dawn 4.4 state...",
             "CheckingDevice" => zh ? "正在检测设备" : "Checking device",
