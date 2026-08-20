@@ -1628,7 +1628,10 @@ public sealed partial class MainWindow : Window
     private async Task ApplyBackgroundImageAsync(string path, string displayName)
     {
         using var stream = await FileRandomAccessStream.OpenAsync(path, FileAccessMode.Read);
-        var bitmap = new BitmapImage();
+        var bitmap = new BitmapImage
+        {
+            DecodePixelWidth = 1320  // 2x window width for high DPI, limits memory to ~5MB
+        };
         await bitmap.SetSourceAsync(stream);
         CustomBackgroundImage.Source = bitmap;
         CustomBackgroundImage.Visibility = Visibility.Visible;
