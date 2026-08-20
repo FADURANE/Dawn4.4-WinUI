@@ -15,8 +15,8 @@ namespace Dawn44.WinUI;
 
 public sealed class VolumeOsdWindow : Window
 {
-    private const int OsdWidth = 310;
-    private const int OsdHeight = 68;
+    private const int OsdWidth = 288;
+    private const int OsdHeight = 70;
     private const int BottomOffset = 84;
     private const int HideDelayMs = 1250;
     private const int SwHide = 0;
@@ -77,9 +77,8 @@ public sealed class VolumeOsdWindow : Window
             Height = 4,
             CornerRadius = new CornerRadius(2),
             Foreground = new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x00, 0x78, 0xD4)),
-            Background = new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0xD1, 0xD1, 0xD1)),
+            Background = new SolidColorBrush(Colors.Transparent),
             VerticalAlignment = VerticalAlignment.Center,
-            MinWidth = 180,
         };
 
         Content = BuildContent();
@@ -110,8 +109,8 @@ public sealed class VolumeOsdWindow : Window
     {
         var root = new Grid
         {
-            Padding = new Thickness(20, 0, 20, 0),
-            Background = new SolidColorBrush(ColorHelper.FromArgb(0xF2, 0xF3, 0xF3, 0xF3)),
+            Padding = new Thickness(18, 0, 16, 0),
+            Background = new SolidColorBrush(ColorHelper.FromArgb(0xF3, 0xF3, 0xF3, 0xF3)),
         };
 
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -125,7 +124,7 @@ public sealed class VolumeOsdWindow : Window
             FontSize = 20,
             Foreground = new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x1F, 0x1F, 0x1F)),
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 16, 0),
+            Margin = new Thickness(0, 0, 18, 0),
         };
         root.Children.Add(icon);
 
@@ -133,25 +132,22 @@ public sealed class VolumeOsdWindow : Window
         root.Children.Add(_progressBar);
 
         Grid.SetColumn(_valueText, 2);
-        _valueText.Margin = new Thickness(16, 0, 0, 0);
+        _valueText.Margin = new Thickness(14, 0, 0, 0);
         root.Children.Add(_valueText);
 
         var clipBorder = new Border
         {
             CornerRadius = new CornerRadius(8),
-            BorderThickness = new Thickness(1),
-            BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(0x14, 0x00, 0x00, 0x00)),
             Child = root,
         };
 
-        var shadowGrid = new Grid
+        return new Grid
         {
-            Children = { clipBorder },
+            Children =
+            {
+                clipBorder,
+            },
         };
-        shadowGrid.Shadow = new Microsoft.UI.Xaml.Media.ThemeShadow();
-        shadowGrid.Translation = new System.Numerics.Vector3(0, 0, 16);
-
-        return shadowGrid;
     }
 
     private void MoveNearWindowsVolumeFlyout(Window owner)
