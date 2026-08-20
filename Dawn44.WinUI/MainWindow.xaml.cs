@@ -127,6 +127,8 @@ public sealed partial class MainWindow : Window
     private bool _isLoadingBackgroundAdjustment = true;
     private bool _isDeviceConnected;
     private bool _hasCompletedInitialRefresh;
+    private string? _cachedBackgroundPath;
+    private string? _cachedBackgroundName;
     private bool _startMinimizedToTray;
     private CancellationTokenSource? _hotkeyPollCts;
     private string _language = "en";
@@ -846,10 +848,17 @@ public sealed partial class MainWindow : Window
 
     private void HideToTray()
     {
+        // Release background image memory when minimized to tray
+        if (CustomBackgroundImage.Source != null)
+        {
+            _cachedBackgroundPath = GetBackgroundImageToken();
+            _cachedBackgroundName = GetBackgroundImageName();
+            CustomBackgroundImage.Source = null;
+        }
         _appWindow.Hide();
     }
 
-    private void ShowFromTray()
+    private async void ShowFromTray()
     {
         _appWindow.Show();
         ShowWindow(_hwnd, SwRestore);
@@ -861,6 +870,19 @@ public sealed partial class MainWindow : Window
 
         SetForegroundWindow(_hwnd);
         Activate();
+
+        // Restore background image if it was cached
+        if (!string.IsNullOrWhiteSpace(_cachedBackgroundPath))
+        {
+            try
+            {
+                await ApplyBackgroundImageAsync(_cachedBackgroundPath, _cachedBackgroundName ?? System.IO.Path.GetFileName(_cachedBackgroundPath));
+            }
+            catch
+            {
+                // Ignore errors on restore; user can re-select if needed
+            }
+        }
     }
 
     private void ExitApplication()
@@ -1628,10 +1650,7 @@ public sealed partial class MainWindow : Window
     private async Task ApplyBackgroundImageAsync(string path, string displayName)
     {
         using var stream = await FileRandomAccessStream.OpenAsync(path, FileAccessMode.Read);
-        var bitmap = new BitmapImage
-        {
-            DecodePixelWidth = 1320  // 2x window width for high DPI, limits memory to ~5MB
-        };
+        var bitmap = new BitmapImage();
         await bitmap.SetSourceAsync(stream);
         CustomBackgroundImage.Source = bitmap;
         CustomBackgroundImage.Visibility = Visibility.Visible;
