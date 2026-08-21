@@ -133,6 +133,7 @@ public sealed partial class MainWindow : Window
     private string? _cachedBackgroundPath;
     private string? _cachedBackgroundName;
     private bool _startMinimizedToTray;
+    private bool _isHiddenToTray;
     private CancellationTokenSource? _hotkeyPollCts;
     private string _language = "en";
     private HotkeyCaptureTarget _hotkeyCaptureTarget = HotkeyCaptureTarget.None;
@@ -150,6 +151,8 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         _startMinimizedToTray = startMinimizedToTray;
+        // Set before LoadSettingsUi so the background loader knows not to decode into a hidden window.
+        _isHiddenToTray = startMinimizedToTray;
         _isLoadingBackgroundAdjustment = false;
         ExtendsContentIntoTitleBar = true;
 
@@ -857,18 +860,18 @@ public sealed partial class MainWindow : Window
 
     private void HideToTray()
     {
-        // Release background image memory when minimized to tray
-        if (CustomBackgroundImage.Source != null)
-        {
-            _cachedBackgroundPath = GetBackgroundImageToken();
-            _cachedBackgroundName = GetBackgroundImageName();
-            CustomBackgroundImage.Source = null;
-        }
+        _isHiddenToTray = true;
+
+        // Release background image memory while minimized to tray.
+        _cachedBackgroundPath = GetBackgroundImageToken();
+        _cachedBackgroundName = GetBackgroundImageName();
+        CustomBackgroundImage.Source = null;
         _appWindow.Hide();
     }
 
     private async void ShowFromTray()
     {
+        _isHiddenToTray = false;
         _appWindow.Show();
         ShowWindow(_hwnd, SwRestore);
         ShowWindow(_hwnd, SwShow);
@@ -881,7 +884,7 @@ public sealed partial class MainWindow : Window
         Activate();
 
         // Restore background image if it was cached
-        if (!string.IsNullOrWhiteSpace(_cachedBackgroundPath))
+        if (CustomBackgroundImage.Source is null && !string.IsNullOrWhiteSpace(_cachedBackgroundPath))
         {
             try
             {
@@ -1653,6 +1656,18 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            // On a --tray launch this runs while the window is already hidden. Decoding the
+            // background then would leave a full-resolution bitmap resident for the whole
+            // session, so remember it and let ShowFromTray load it on first restore instead.
+            if (_isHiddenToTray)
+            {
+                _cachedBackgroundPath = path;
+                _cachedBackgroundName = GetBackgroundImageName();
+                BackgroundPathText.Text = _cachedBackgroundName ?? System.IO.Path.GetFileName(path);
+                AdjustBackgroundButton.Visibility = Visibility.Visible;
+                return;
+            }
+
             await ApplyBackgroundImageAsync(path, GetBackgroundImageName() ?? System.IO.Path.GetFileName(path));
         }
         catch (Exception ex)
