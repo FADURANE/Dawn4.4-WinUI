@@ -1,5 +1,5 @@
 #define MyAppName "Dawn4.4 Control"
-#define MyAppVersion "1.0.17"
+#define MyAppVersion "1.0.18"
 #define MyAppPublisher "FADURANE"
 #define MyAppExeName "Dawn44.WinUI.exe"
 #define SourceDir "..\Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged"
@@ -45,6 +45,14 @@ Source: "{#WinAppRuntimeDir}\Microsoft.WindowsAppRuntime.2.msix"; DestDir: "{tmp
 
 [InstallDelete]
 Type: files; Name: "{app}\resources.pri"
+
+[Registry]
+; Declared only so uninstall removes the auto-start entry the app itself writes.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "{#MyAppName}"; Flags: dontcreatekey uninsdeletevalue
+
+[UninstallRun]
+; The app registers an elevated logon task when "Run as administrator" is enabled.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppName} Startup"" /F"; Flags: runhidden; RunOnceId: "DeleteStartupTask"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\Assets\Dawn44Control.ico"

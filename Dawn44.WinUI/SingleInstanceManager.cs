@@ -27,6 +27,31 @@ internal static class SingleInstanceManager
         return false;
     }
 
+    /// <summary>
+    /// Gives up ownership of the single-instance mutex so a replacement process (for example an
+    /// elevated relaunch) can acquire it. Without this the replacement sees the mutex still held
+    /// by the process that spawned it, treats itself as a duplicate, and exits immediately.
+    /// </summary>
+    public static void Release()
+    {
+        if (_mutex is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _mutex.ReleaseMutex();
+        }
+        catch (ApplicationException)
+        {
+            // Not owned by this thread; disposing below is still the right cleanup.
+        }
+
+        _mutex.Dispose();
+        _mutex = null;
+    }
+
     public static void NotifyExistingInstance()
     {
         if (ShowExistingWindowMessage != 0)

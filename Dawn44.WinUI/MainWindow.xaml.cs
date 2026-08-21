@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -91,6 +92,8 @@ public sealed partial class MainWindow : Window
     private const uint MfSeparator = 0x00000800;
     private const string RunRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunRegistryName = "Dawn4.4 Control";
+    private const string StartupTaskName = "Dawn4.4 Control Startup";
+    private const int SchTasksTimeoutMs = 10000;
     private const string CloseBehaviorKey = "CloseBehavior";
     private const string BackgroundImageTokenKey = "BackgroundImageToken";
     private const string BackgroundImageNameKey = "BackgroundImageName";
@@ -369,7 +372,7 @@ public sealed partial class MainWindow : Window
             HotkeyOsdSwitch.IsOn ? Text("HotkeyOsdEnabled") : Text("HotkeyOsdDisabled"));
     }
 
-    private void AdminSwitch_Toggled(object sender, RoutedEventArgs e)
+    private async void AdminSwitch_Toggled(object sender, RoutedEventArgs e)
     {
         if (_isLoadingSettings) return;
 
@@ -379,33 +382,39 @@ public sealed partial class MainWindow : Window
         {
             if (IsCurrentProcessElevated())
             {
+                // Now elevated, so the logon task can be (re)created at the highest run level.
+                await Task.Run(() => ApplyStartupRegistration(GetStartupEnabled()));
                 ShowStatus(InfoBarSeverity.Success, Text("Settings"), Text("RunAsAdminAlready"));
             }
             else
             {
+                // The elevated instance re-applies startup registration during its own startup.
                 RestartAsAdmin();
             }
         }
         else
         {
+            // Back to a plain Run entry; the elevated logon task is no longer wanted.
+            await Task.Run(() => ApplyStartupRegistration(GetStartupEnabled()));
             ShowStatus(InfoBarSeverity.Informational, Text("Settings"), Text("RunAsAdminDisabled"));
         }
     }
 
-    private void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
+    private async void StartupSwitch_Toggled(object sender, RoutedEventArgs e)
     {
         if (_isLoadingSettings)
         {
             return;
         }
 
-        SaveStartupEnabled(StartupSwitch.IsOn);
-        var applied = ApplyStartupRegistration(StartupSwitch.IsOn);
+        var enabled = StartupSwitch.IsOn;
+        SaveStartupEnabled(enabled);
+        var applied = await Task.Run(() => ApplyStartupRegistration(enabled));
         ShowStatus(
             applied ? InfoBarSeverity.Success : InfoBarSeverity.Warning,
             Text("Startup"),
             applied
-                ? (StartupSwitch.IsOn ? Text("StartupEnabled") : Text("StartupDisabled"))
+                ? (enabled ? Text("StartupEnabled") : Text("StartupDisabled"))
                 : Text("StartupFailed"));
     }
 
@@ -1321,7 +1330,8 @@ public sealed partial class MainWindow : Window
 
         ApplyLanguage();
         ApplyResizeLockFromSettings();
-        ApplyStartupRegistration(GetStartupEnabled());
+        // Startup registration can spawn schtasks, so keep it off the window construction path.
+        _ = Task.Run(() => ApplyStartupRegistration(GetStartupEnabled()));
         _ = LoadBackgroundImageFromSettingsAsync();
     }
 
@@ -1382,14 +1392,22 @@ public sealed partial class MainWindow : Window
 
     private void RestartAsAdmin()
     {
+        // Hand the single-instance mutex over first: the elevated child starts while this process
+        // is still alive, and would otherwise treat itself as a duplicate and exit immediately.
+        SingleInstanceManager.Release();
+
         try
         {
             var exePath = Environment.ProcessPath
                 ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
             var cmdArgs = Environment.GetCommandLineArgs();
-            var extraArgs = cmdArgs.Length > 1
-                ? string.Join(" ", cmdArgs, 1, cmdArgs.Length - 1)
-                : string.Empty;
+            // The window is visible right now, so do not carry --tray into the restarted instance.
+            var extraArgs = string.Join(
+                ' ',
+                cmdArgs
+                    .Skip(1)
+                    .Where(argument => !string.Equals(argument, App.TraySwitch, StringComparison.OrdinalIgnoreCase))
+                    .Append(App.ElevatedRelaunchSwitch));
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
                 FileName = exePath,
@@ -1401,7 +1419,8 @@ public sealed partial class MainWindow : Window
         }
         catch
         {
-            // User cancelled the UAC prompt — revert toggle
+            // User cancelled the UAC prompt — keep running and revert the toggle.
+            SingleInstanceManager.TryAcquire();
             _isLoadingSettings = true;
             AdminSwitch.IsOn = false;
             _isLoadingSettings = false;
@@ -2026,6 +2045,28 @@ public sealed partial class MainWindow : Window
 
     private static bool ApplyStartupRegistration(bool enabled)
     {
+        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (enabled && string.IsNullOrWhiteSpace(exePath))
+        {
+            return false;
+        }
+
+        // An elevated app cannot auto-start from the HKCU Run key: Windows would have to raise a
+        // UAC consent prompt at logon, and when nothing answers it the process exits without ever
+        // showing a window. A scheduled task running at the highest available level starts
+        // elevated with no prompt at all, so that is used whenever Run-as-administrator is on.
+        if (enabled && GetRunAsAdmin() && TryCreateStartupTask(exePath!))
+        {
+            SetRunRegistryValue(null);
+            return true;
+        }
+
+        TryDeleteStartupTask();
+        return SetRunRegistryValue(enabled ? $"\"{exePath}\" {App.TraySwitch}" : null);
+    }
+
+    private static bool SetRunRegistryValue(string? command)
+    {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunRegistryPath, writable: true)
@@ -2035,19 +2076,13 @@ public sealed partial class MainWindow : Window
                 return false;
             }
 
-            if (enabled)
+            if (command is null)
             {
-                var exePath = Process.GetCurrentProcess().MainModule?.FileName;
-                if (string.IsNullOrWhiteSpace(exePath))
-                {
-                    return false;
-                }
-
-                key.SetValue(RunRegistryName, $"\"{exePath}\" --tray");
+                key.DeleteValue(RunRegistryName, throwOnMissingValue: false);
             }
             else
             {
-                key.DeleteValue(RunRegistryName, throwOnMissingValue: false);
+                key.SetValue(RunRegistryName, command);
             }
 
             return true;
@@ -2056,6 +2091,141 @@ public sealed partial class MainWindow : Window
         {
             return false;
         }
+    }
+
+    private static bool TryCreateStartupTask(string exePath)
+    {
+        // Creating a HighestAvailable task needs administrator rights. When the app is not yet
+        // elevated this fails and the caller falls back to the Run key; the task is then created
+        // on the next elevated launch, because startup registration is re-applied at startup.
+        var xmlPath = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"Dawn44ControlStartup-{Guid.NewGuid():N}.xml");
+
+        try
+        {
+            // schtasks only accepts Unicode task definitions.
+            System.IO.File.WriteAllText(xmlPath, BuildStartupTaskXml(exePath), System.Text.Encoding.Unicode);
+            return RunSchTasks("/Create", "/TN", StartupTaskName, "/XML", xmlPath, "/F");
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                System.IO.File.Delete(xmlPath);
+            }
+            catch
+            {
+                // Temp file cleanup is best effort.
+            }
+        }
+    }
+
+    private static void TryDeleteStartupTask()
+    {
+        RunSchTasks("/Delete", "/TN", StartupTaskName, "/F");
+    }
+
+    private static bool RunSchTasks(params string[] arguments)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            return process.WaitForExit(SchTasksTimeoutMs) && process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildStartupTaskXml(string exePath)
+    {
+        string user;
+        using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+        {
+            user = identity.Name;
+        }
+
+        var workingDirectory = System.IO.Path.GetDirectoryName(exePath) ?? string.Empty;
+
+        return $"""
+            <?xml version="1.0" encoding="UTF-16"?>
+            <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+              <RegistrationInfo>
+                <Description>Starts Dawn4.4 Control minimized to the notification area at logon.</Description>
+              </RegistrationInfo>
+              <Triggers>
+                <LogonTrigger>
+                  <Enabled>true</Enabled>
+                  <UserId>{Escape(user)}</UserId>
+                </LogonTrigger>
+              </Triggers>
+              <Principals>
+                <Principal id="Author">
+                  <UserId>{Escape(user)}</UserId>
+                  <LogonType>InteractiveToken</LogonType>
+                  <RunLevel>HighestAvailable</RunLevel>
+                </Principal>
+              </Principals>
+              <Settings>
+                <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+                <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+                <AllowHardTerminate>true</AllowHardTerminate>
+                <StartWhenAvailable>false</StartWhenAvailable>
+                <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+                <IdleSettings>
+                  <StopOnIdleEnd>false</StopOnIdleEnd>
+                  <RestartOnIdle>false</RestartOnIdle>
+                </IdleSettings>
+                <AllowStartOnDemand>true</AllowStartOnDemand>
+                <Enabled>true</Enabled>
+                <Hidden>false</Hidden>
+                <RunOnlyIfIdle>false</RunOnlyIfIdle>
+                <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+                <Priority>7</Priority>
+              </Settings>
+              <Actions Context="Author">
+                <Exec>
+                  <Command>{Escape(exePath)}</Command>
+                  <Arguments>{App.TraySwitch}</Arguments>
+                  <WorkingDirectory>{Escape(workingDirectory)}</WorkingDirectory>
+                </Exec>
+              </Actions>
+            </Task>
+            """;
+
+        static string Escape(string value) => value
+            .Replace("&", "&amp;")
+            .Replace("<", "&lt;")
+            .Replace(">", "&gt;")
+            .Replace("\"", "&quot;");
     }
 
     private static int Clamp(int value, int minimum, int maximum)
