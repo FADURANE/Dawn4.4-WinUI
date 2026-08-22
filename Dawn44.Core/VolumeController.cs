@@ -1,35 +1,38 @@
 using System;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Dawn44.Core;
 
 /// <summary>
-/// Applies relative volume steps for the headless mode, from a verified in-memory value.
+/// Applies relative volume steps for the headless mode, from a verified value, on a dedicated thread.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is not <see cref="VolumeWriteQueue"/>, which exists to make a slider drag sound smooth by
-/// ramping toward an absolute target. The shortcut path has the opposite problem: there is no OSD in
-/// the background mode, so the user only has their ears.
+/// This is not <see cref="VolumeWriteQueue"/>, which ramps toward an absolute target so that a slider
+/// drag sounds smooth. The shortcut path has the opposite problem: there is no OSD in the background
+/// mode, so the user only has their ears.
 /// </para>
 /// <para>
-/// The original version cached the volume indefinitely and never read the device on the key path, to
-/// keep the first press of a burst from waiting on a 150-500ms read. That was the wrong trade. A
-/// relative step is only as good as the value it starts from, and raw 0 means "no attenuation", so
-/// display 60 — maximum — is exactly what a garbled or zeroed response decodes to. One bad reading
-/// therefore turns the next keypress into a write of 60 on a 4.4mm balanced output. Now the device is
-/// re-read whenever the value is older than <see cref="TrustWindowMs"/>, a reading that disagrees with
-/// what we last knew has to be confirmed by a second read, and a step with nothing trustworthy to
-/// start from is dropped rather than guessed at.
+/// <b>Never write from a value that has not been verified.</b> A relative step is only as good as the
+/// value it starts from, and raw 0 means "no attenuation", so display 60 — maximum — is exactly what a
+/// garbled or zeroed response decodes to. One bad reading turns the next keypress into a write of 60 on
+/// a 4.4mm balanced output. So the device is re-read whenever the value is older than
+/// <see cref="TrustWindowMs"/>, a reading that disagrees with what we last knew has to be confirmed by
+/// a second read, and a step with nothing trustworthy to start from is dropped rather than guessed at.
+/// Within a burst the value stays trusted — each successful write tells us what the device now holds —
+/// so the read cost falls once at the start of a burst rather than on every keypress.
 /// </para>
 /// <para>
-/// Within a burst the value stays trusted — each successful write tells us what the device is now — so
-/// the read cost is paid once at the start of a burst rather than per keypress.
+/// <b>Allocate nothing per keypress.</b> The first version was async: <c>Task.Delay</c> between writes
+/// and a <c>Task.Run</c> per HID command, so every 28ms of a held shortcut cost a task, a timer queue
+/// node, a cancellation registration and a state machine. In a process whose whole heap is a couple of
+/// megabytes that churn is what made memory climb while the volume moved — the same defect the poll
+/// loop had with <c>Task.Delay(15)</c> when idle. The worker is now a plain thread that parks on a
+/// <see cref="ManualResetEventSlim"/> and calls the synchronous device methods directly, and once a
+/// burst settles it hands back whatever the burst did grow through <see cref="ProcessFootprint.Trim"/>.
 /// </para>
 /// <para>
-/// <see cref="Change"/> is called from the poll thread and never blocks: it accumulates a delta and
-/// signals the worker.
+/// <see cref="Change"/> is called from the hotkey poll thread and neither blocks nor allocates.
 /// </para>
 /// </remarks>
 public sealed class VolumeController
@@ -51,16 +54,23 @@ public sealed class VolumeController
     /// <summary>How far a fresh reading may sit from the last known value before it needs a second one.</summary>
     private const int CorroborationTolerance = 2;
 
+    /// <summary>
+    /// Rate limit for <see cref="FootprintObserved"/>. Reported after a burst rather than on a timer, so
+    /// the log shows the footprint next to the work that moved it, and never while genuinely idle.
+    /// </summary>
+    private const int FootprintIntervalMs = 300000;
+
     private readonly DawnHidDevice _device;
-    private readonly SemaphoreSlim _signal = new(0);
     private readonly object _gate = new();
 
-    private CancellationTokenSource? _cts;
+    private ManualResetEventSlim? _wake;
+    private ManualResetEventSlim? _stop;
+    private Thread? _worker;
     private int _pendingDelta;
-    private bool _signalled;
     private int? _volume;
     private int? _lastKnown;
     private long _verifiedAtMs;
+    private long _footprintAtMs;
     private bool _refreshDue;
 
     public VolumeController(DawnHidDevice device)
@@ -68,7 +78,7 @@ public sealed class VolumeController
         _device = device;
     }
 
-    /// <summary>Raised after each successful write, for logging.</summary>
+    /// <summary>Raised after each successful write, for logging. Runs on the worker thread.</summary>
     public Action<int>? VolumeApplied { get; set; }
 
     /// <summary>Raised for unexpected exceptions in the worker; the worker keeps running.</summary>
@@ -77,19 +87,60 @@ public sealed class VolumeController
     /// <summary>Raised when a reading is rejected as untrustworthy and the step is dropped.</summary>
     public Action<string>? ReadRejected { get; set; }
 
+    /// <summary>
+    /// Raised after a burst settles, at most every <see cref="FootprintIntervalMs"/>, with the line from
+    /// <see cref="ProcessFootprint.Describe"/>. The resident has no other way to show where its memory
+    /// went — see the remarks on that method.
+    /// </summary>
+    public Action<string>? FootprintObserved { get; set; }
+
     public void Start()
     {
         Stop();
-        var cts = new CancellationTokenSource();
-        _cts = cts;
-        _ = Task.Run(() => RunAsync(cts.Token));
+
+        // spinCount 0 on both: this thread's job is to park, so spinning first would only burn CPU.
+        var wake = new ManualResetEventSlim(false, 0);
+        var stop = new ManualResetEventSlim(false, 0);
+
+        // Materialised once, because WaitHandle.WaitAny needs an array and this is the idle path. Passed
+        // down the call chain rather than held in a field, so a Stop() racing with the worker cannot
+        // leave it reading a nulled-out reference.
+        var wakeOrStop = new[] { wake.WaitHandle, stop.WaitHandle };
+        var worker = new Thread(() => Run(wake, stop, wakeOrStop))
+        {
+            IsBackground = true,
+            Name = "Dawn44 volume worker",
+        };
+
+        _wake = wake;
+        _stop = stop;
+        _worker = worker;
+        worker.Start();
     }
 
     public void Stop()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = null;
+        var wake = _wake;
+        var stop = _stop;
+        var worker = _worker;
+        _wake = null;
+        _stop = null;
+        _worker = null;
+
+        if (stop is null || wake is null)
+        {
+            return;
+        }
+
+        stop.Set();
+
+        // Only released once the worker is known to be out of its wait; disposing under a live Wait
+        // would fault that thread. A Stop() from a callback runs on the worker and cannot join itself.
+        if (worker is null || worker == Thread.CurrentThread || worker.Join(2000))
+        {
+            wake.Dispose();
+            stop.Dispose();
+        }
     }
 
     /// <summary>Queues a relative step. Safe to call from the hotkey poll thread.</summary>
@@ -103,57 +154,53 @@ public sealed class VolumeController
         lock (_gate)
         {
             _pendingDelta += delta;
-            if (_signalled)
-            {
-                return;
-            }
-
-            _signalled = true;
         }
 
-        _signal.Release();
+        // Unconditional and idempotent: a set event that the worker has not looked at yet costs
+        // nothing, and the bookkeeping needed to avoid it is how wake-ups get lost.
+        _wake?.Set();
     }
 
-    private async Task RunAsync(CancellationToken cancellationToken)
+    private void Run(ManualResetEventSlim wake, ManualResetEventSlim stop, WaitHandle[] wakeOrStop)
     {
         // Seeded once up front, off the key path, so the first keypress has a last-known value to
-        // corroborate its reading against and needs only one read rather than two.
+        // corroborate its reading against and needs one read rather than two. Startup is also the most
+        // allocation-heavy moment this process has — it enumerates every HID device on the machine — so
+        // it is the first thing worth handing back.
         try
         {
-            await RefreshAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
+            Refresh();
         }
         catch (Exception ex)
         {
             Faulted?.Invoke(ex);
         }
 
-        while (!cancellationToken.IsCancellationRequested)
+        ProcessFootprint.Trim();
+
+        while (!stop.IsSet)
         {
             try
             {
-                if (!await StepAsync(cancellationToken).ConfigureAwait(false))
+                if (!Step(wake, stop, wakeOrStop))
                 {
                     return;
                 }
             }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
             catch (Exception ex)
             {
+                // A thread of our own, so an escaping exception would take the process down.
                 Faulted?.Invoke(ex);
-                await DelayAsync(DeviceRetryMs, cancellationToken).ConfigureAwait(false);
+                if (stop.Wait(DeviceRetryMs))
+                {
+                    return;
+                }
             }
         }
     }
 
     /// <summary><see langword="false"/> ends the worker loop.</summary>
-    private async Task<bool> StepAsync(CancellationToken cancellationToken)
+    private bool Step(ManualResetEventSlim wake, ManualResetEventSlim stop, WaitHandle[] wakeOrStop)
     {
         int delta;
         lock (_gate)
@@ -164,20 +211,19 @@ public sealed class VolumeController
 
         if (delta == 0)
         {
-            return await WaitForWorkAsync(cancellationToken).ConfigureAwait(false);
+            return WaitForWork(wake, stop, wakeOrStop);
         }
 
-        if (!await EnsureTrustedVolumeAsync(cancellationToken).ConfigureAwait(false))
+        if (!EnsureTrustedVolume())
         {
             // Nothing trustworthy to step from. Dropping the press is the safe failure: writing a
             // relative step onto a guess is what put 60 on a balanced output once already, and the
-            // user's next press will retry anyway.
-            await DelayAsync(DeviceRetryMs, cancellationToken).ConfigureAwait(false);
-            return true;
+            // user's next press retries anyway.
+            return !stop.Wait(DeviceRetryMs);
         }
 
-        // Only part of a backlog is applied per write; the rest goes back on the queue so the loop
-        // keeps draining it at WriteIntervalMs.
+        // Only part of a backlog is applied per write; the rest goes back on the queue, which the loop
+        // keeps draining at WriteIntervalMs without needing another wake-up.
         var step = StepToApply(delta);
         if (step != delta)
         {
@@ -190,9 +236,9 @@ public sealed class VolumeController
         var next = DawnProtocol.Clamp(_volume!.Value + step, 0, DawnProtocol.MaxVolume);
         if (next != _volume)
         {
-            if (await _device.TrySetVolumeAsync(next, cancellationToken).ConfigureAwait(false))
+            if (_device.TrySetVolume(next))
             {
-                // A write that the device accepted is itself a verification: we now know what it holds.
+                // A write the device accepted is itself a verification: we know what it holds now.
                 Accept(next);
                 VolumeApplied?.Invoke(next);
             }
@@ -204,57 +250,71 @@ public sealed class VolumeController
         }
 
         _refreshDue = true;
-        await DelayAsync(WriteIntervalMs, cancellationToken).ConfigureAwait(false);
-        return true;
+        return !stop.Wait(WriteIntervalMs);
     }
 
     /// <summary>
-    /// Parks until a keypress arrives. Once a burst has happened, the wait is bounded so the cache
-    /// gets resynced <see cref="RefreshIdleMs"/> after the last write; otherwise it is unbounded and
-    /// the process is genuinely idle.
+    /// Parks until a keypress arrives. Once a burst has happened the wait is bounded, so the value gets
+    /// resynced and the footprint trimmed <see cref="RefreshIdleMs"/> after the last write; otherwise it
+    /// is unbounded and the process is genuinely idle.
     /// </summary>
-    private async Task<bool> WaitForWorkAsync(CancellationToken cancellationToken)
+    private bool WaitForWork(ManualResetEventSlim wake, ManualResetEventSlim stop, WaitHandle[] wakeOrStop)
     {
-        bool signalled;
-        try
-        {
-            signalled = await _signal
-                .WaitAsync(_refreshDue ? RefreshIdleMs : Timeout.Infinite, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
+        var signalled = WaitHandle.WaitAny(wakeOrStop, _refreshDue ? RefreshIdleMs : Timeout.Infinite);
+        if (signalled == 1)
         {
             return false;
         }
 
-        if (signalled)
+        if (signalled != WaitHandle.WaitTimeout)
         {
-            lock (_gate)
-            {
-                _signalled = false;
-            }
-
+            // Reset before the caller reads _pendingDelta, so a Change that lands in between leaves the
+            // event set and costs one extra pass rather than being lost.
+            wake.Reset();
             return true;
         }
 
         _refreshDue = false;
-        await RefreshAsync(cancellationToken).ConfigureAwait(false);
+        Refresh();
+        ProcessFootprint.Trim();
+        ReportFootprint();
         return true;
     }
 
     /// <summary>
-    /// <see cref="_volume"/>, <see cref="_lastKnown"/> and <see cref="_verifiedAtMs"/> are only ever
-    /// touched by the worker task, so they need no lock.
+    /// Reports the footprint after the trim, so the number in the log is the one the process settles at
+    /// rather than its high-water mark.
+    /// </summary>
+    private void ReportFootprint()
+    {
+        var observer = FootprintObserved;
+        if (observer is null)
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        if (_footprintAtMs != 0 && now - _footprintAtMs < FootprintIntervalMs)
+        {
+            return;
+        }
+
+        _footprintAtMs = now;
+        observer(ProcessFootprint.Describe());
+    }
+
+    /// <summary>
+    /// Everything below here runs only on the worker thread, so the volume state needs no lock.
     /// </summary>
     /// <returns><see langword="true"/> when a trustworthy volume is held afterwards.</returns>
-    private async Task<bool> EnsureTrustedVolumeAsync(CancellationToken cancellationToken)
+    private bool EnsureTrustedVolume()
     {
         if (_volume is not null && Environment.TickCount64 - _verifiedAtMs <= TrustWindowMs)
         {
             return true;
         }
 
-        return await RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return Refresh();
     }
 
     /// <summary>
@@ -266,9 +326,9 @@ public sealed class VolumeController
     /// value: raw 0 decodes to display 60, so a zeroed or garbled payload byte reads back as maximum
     /// volume. An unconfirmed jump is discarded, which costs the user one keypress.
     /// </remarks>
-    private async Task<bool> RefreshAsync(CancellationToken cancellationToken)
+    private bool Refresh()
     {
-        var first = await ReadVolumeAsync(cancellationToken).ConfigureAwait(false);
+        var first = ReadVolume();
         if (first is null)
         {
             Forget();
@@ -281,7 +341,7 @@ public sealed class VolumeController
             return true;
         }
 
-        var second = await ReadVolumeAsync(cancellationToken).ConfigureAwait(false);
+        var second = ReadVolume();
         if (second != first)
         {
             ReadRejected?.Invoke(
@@ -305,7 +365,12 @@ public sealed class VolumeController
     /// </remarks>
     internal static bool ReadingNeedsCorroboration(int? lastKnown, int reading)
     {
-        return lastKnown is not int previous || Math.Abs(previous - reading) > CorroborationTolerance;
+        if (lastKnown is int previous)
+        {
+            return Math.Abs(previous - reading) > CorroborationTolerance;
+        }
+
+        return true;
     }
 
     /// <summary>How much of an accumulated delta one write is allowed to apply.</summary>
@@ -321,17 +386,12 @@ public sealed class VolumeController
     /// <see cref="DawnHidDevice"/> reports an undecodable raw byte as -1 rather than 0, precisely so
     /// that it cannot be mistaken here for a real display volume.
     /// </remarks>
-    private async Task<int?> ReadVolumeAsync(CancellationToken cancellationToken)
+    private int? ReadVolume()
     {
         try
         {
-            var state = await _device.TryReadStateAsync(cancellationToken).ConfigureAwait(false);
-            var volume = state?.Volume;
+            var volume = _device.TryReadState()?.Volume;
             return volume is >= 0 and <= DawnProtocol.MaxVolume ? volume : null;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
         }
         catch (Exception ex)
         {
@@ -357,14 +417,7 @@ public sealed class VolumeController
         _volume = null;
     }
 
-    private static async Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await Task.Delay(milliseconds, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
+
+
+
 }

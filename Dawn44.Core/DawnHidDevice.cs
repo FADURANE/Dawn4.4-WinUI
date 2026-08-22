@@ -52,12 +52,32 @@ public sealed class DawnHidDevice
     /// </remarks>
     private HidDeviceInfo? _device;
 
+    /// <summary>
+    /// Reads the device on the calling thread, or returns <see langword="null"/> if it is not there.
+    /// </summary>
+    /// <remarks>
+    /// The headless resident calls this from its own worker thread. Routing it through
+    /// <see cref="Task.Run(Action)"/> the way the GUI does would cost a task, a state machine and a
+    /// cancellation registration per keypress, which is measurable in a process whose whole heap is a
+    /// couple of megabytes.
+    /// </remarks>
+    public DawnDeviceState? TryReadState()
+    {
+        return WithDevice<DawnDeviceState?>(ReadState, null);
+    }
+
+    /// <summary>Writes a volume on the calling thread. See <see cref="TryReadState"/>.</summary>
+    public bool TrySetVolume(int displayVolume)
+    {
+        return TrySendWrite(DawnProtocol.CommandVolume, DawnProtocol.VolumeToRaw(displayVolume));
+    }
+
     public Task<DawnDeviceState?> TryReadStateAsync(CancellationToken cancellationToken = default)
     {
         return Task.Run<DawnDeviceState?>(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return WithDevice<DawnDeviceState?>(ReadState, null);
+            return TryReadState();
         }, cancellationToken);
     }
 
@@ -163,14 +183,19 @@ public sealed class DawnHidDevice
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return WithDevice(
-                device =>
-                {
-                    SendCommand(device, command, (byte)value, readBack: false);
-                    return true;
-                },
-                false);
+            return TrySendWrite(command, value);
         }, cancellationToken);
+    }
+
+    private bool TrySendWrite(byte command, int value)
+    {
+        return WithDevice(
+            device =>
+            {
+                SendCommand(device, command, (byte)value, readBack: false);
+                return true;
+            },
+            false);
     }
 
     /// <summary>

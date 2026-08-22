@@ -68,6 +68,9 @@ internal static class Program
             Faulted = ex => DiagnosticLog.Write("Volume worker fault.", ex),
             // Rare by design, and the only trace of a keypress that was deliberately not applied.
             ReadRejected = message => DiagnosticLog.Write(message),
+            // The resident's own memory trace. Elevated and NativeAOT, it cannot be profiled from
+            // outside, so it reports where its memory is after a burst instead.
+            FootprintObserved = message => DiagnosticLog.Write(message),
         };
         volume.Start();
 
@@ -84,6 +87,7 @@ internal static class Program
         DiagnosticLog.Write(
             $"Background mode resident: pid {Environment.ProcessId}, "
             + $"elevated={Elevation.IsCurrentProcessElevated()}.");
+        DiagnosticLog.Write(ProcessFootprint.Describe());
 
         // Parks the main thread. GetAsyncKeyState polling needs no window and no message pump, which
         // is what lets this process exist without any UI stack at all.
