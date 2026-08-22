@@ -42,15 +42,14 @@
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!--
-      Caps the gen0 budget at 2MB. With the poll loop no longer allocating per tick there is almost
-      nothing left to collect, but this bounds any residual idle drift instead of letting the working
-      set coast upward to whatever budget the GC picks from cache size. It has no MSBuild property, so
-      it goes through the runtime config directly.
-    -->
-    <RuntimeHostConfigurationOption Include="System.GC.Gen0Size" Value="2097152" Trim="true" />
-  </ItemGroup>
+  <!--
+    No gen0 budget cap here. `RuntimeHostConfigurationOption System.GC.Gen0Size=2097152` looks like the
+    way to bound idle heap drift, but ILC turns those items into feature switches and only accepts
+    true/false, so it fails the publish outright:
+    `error : Unexpected feature switch pair 'System.GC.Gen0Size=2097152'`. Numeric GC knobs reach a
+    NativeAOT app only through DOTNET_* environment variables, which is no use for something the user
+    double-clicks. With the poll loop no longer allocating per tick there is nothing much left to cap.
+  -->
 
   <ItemGroup>
     <ProjectReference Include="..\Dawn44.Core\Dawn44.Core.csproj" />
