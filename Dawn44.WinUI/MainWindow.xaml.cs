@@ -1,5 +1,6 @@
 ﻿using Dawn44.Core;
 using Microsoft.UI;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -23,6 +24,13 @@ public sealed partial class MainWindow : Window
 
     private const int DefaultWindowWidth = 660;
     private const int DefaultWindowHeight = 1460;
+
+    /// <summary>
+    /// How often the other mode's handover request is checked for. A single file-existence test on
+    /// the UI dispatcher, which already has a message pump running, so this costs no thread of its
+    /// own.
+    /// </summary>
+    private const int ExitRequestPollMs = 500;
     private const int HotkeyVolumeUp = 0x4441;
     private const int HotkeyVolumeDown = 0x4442;
     // Aliases for Dawn44.Core so the ~20 call sites below stay untouched.
@@ -77,10 +85,13 @@ public sealed partial class MainWindow : Window
     private const int TrayMenuFilterBase = 1030;
     private const int TrayMenuRestore = 1001;
     private const int TrayMenuExit = 1002;
+    private const int TrayMenuModeGui = 1040;
+    private const int TrayMenuModeBackground = 1041;
     private const uint TpmRightButton = 0x0002;
     private const uint TpmReturnCmd = 0x0100;
     private const uint MfString = 0x00000000;
     private const uint MfDisabled = 0x00000002;
+    private const uint MfChecked = 0x00000008;
     private const uint MfSeparator = 0x00000800;
     // Only the keys still named at a call site are aliased; the rest are reached through the typed
     // SettingsStore accessors.
@@ -93,6 +104,7 @@ public sealed partial class MainWindow : Window
     private readonly DawnHidDevice _device = new();
     private readonly VolumeWriteQueue _volumeWriteQueue;
     private readonly HotkeyWatcher _hotkeyWatcher;
+    private readonly DispatcherQueueTimer _exitRequestTimer;
     private readonly IntPtr _hwnd;
     private readonly AppWindow _appWindow;
     private readonly SubclassProc _subclassProc;
@@ -153,6 +165,14 @@ public sealed partial class MainWindow : Window
         RegisterHotkeys();
         SetWindowSubclass(_hwnd, _subclassProc, UIntPtr.Zero, UIntPtr.Zero);
         _appWindow.Closing += AppWindow_Closing;
+
+        // The owner half of the mode handshake. A named event would be the obvious mechanism and is
+        // the wrong one across integrity levels, so the resident asks by dropping a file and this
+        // window watches for it — see ModeArbitration.
+        _exitRequestTimer = DispatcherQueue.CreateTimer();
+        _exitRequestTimer.Interval = TimeSpan.FromMilliseconds(ExitRequestPollMs);
+        _exitRequestTimer.Tick += ExitRequestTimer_Tick;
+        _exitRequestTimer.Start();
 
         _ = RefreshAsync();
         if (_startMinimizedToTray)
@@ -812,6 +832,74 @@ public sealed partial class MainWindow : Window
         Close();
     }
 
+    /// <summary>
+    /// Another mode is starting and wants this process gone. The sentinel is cleared here rather than
+    /// left to the newcomer, so one that dies mid-handover cannot leave a file behind that makes the
+    /// next GUI exit the moment it starts.
+    /// </summary>
+    private void ExitRequestTimer_Tick(DispatcherQueueTimer sender, object args)
+    {
+        if (_isExiting || !ModeArbitration.IsExitRequested())
+        {
+            return;
+        }
+
+        ModeArbitration.ClearExitRequest();
+        DiagnosticLog.Write("GUI mode exiting: another mode asked to take over.");
+        ExitApplication();
+    }
+
+    /// <summary>
+    /// Switches which executable the user wants resident. Selecting the mode already in effect is
+    /// still worth honouring — it rewrites the logon entry, which is the one thing that can be out of
+    /// step after an install or a repair.
+    /// </summary>
+    private void SwitchMode(AppMode mode)
+    {
+        if (mode == AppMode.Gui)
+        {
+            SettingsStore.SaveMode(AppMode.Gui);
+            _ = Task.Run(() => ApplyStartupRegistration(GetStartupEnabled()));
+            ShowFromTray();
+            ShowStatus(InfoBarSeverity.Success, Text("TrayModeTitle"), Text("ModeGuiApplied"));
+            return;
+        }
+
+        var exePath = ModeExecutable.Resolve(AppMode.Background);
+        if (exePath is null)
+        {
+            // A development run, or an install from before the resident shipped. Say so instead of
+            // writing a mode whose executable does not exist.
+            ShowFromTray();
+            ShowStatus(InfoBarSeverity.Warning, Text("TrayModeTitle"), Text("BackgroundExeMissing"));
+            return;
+        }
+
+        SettingsStore.SaveMode(AppMode.Background);
+
+        // Re-registered before the handover, and synchronously: after this process exits there is
+        // nobody left to fix a logon entry that still points at the window.
+        ApplyStartupRegistration(GetStartupEnabled());
+
+        if (!ModeExecutable.TryStart(exePath, ModeExecutable.ArgumentsFor(AppMode.Background)))
+        {
+            SettingsStore.SaveMode(AppMode.Gui);
+            ApplyStartupRegistration(GetStartupEnabled());
+            ShowFromTray();
+            ShowStatus(InfoBarSeverity.Error, Text("TrayModeTitle"), Text("ModeSwitchFailed"));
+            return;
+        }
+
+        // Nothing has been torn down until the resident is confirmed started, so a failed launch
+        // leaves a fully working window. From here the resident is parked in its own TakeOver waiting
+        // for running.json to disappear, which CleanupNativeResources does by releasing it.
+        DiagnosticLog.Write("GUI mode handing over to the background resident.");
+        _isExiting = true;
+        CleanupNativeResources();
+        SingleInstanceManager.Release();
+        Close();
+    }
+
     private void ShowTrayMenu()
     {
         if (!GetCursorPos(out var point))
@@ -848,6 +936,15 @@ public sealed partial class MainWindow : Window
             AppendMenu(menu, MfString, TrayMenuFilterBase + 3, Text("FilterSlowPhase"));
             AppendMenu(menu, MfString, TrayMenuFilterBase + 4, Text("FilterNos"));
             AppendMenu(menu, MfSeparator, 0, string.Empty);
+            AppendMenu(menu, MfString | MfDisabled, 0, Text("TrayModeTitle"));
+            var mode = SettingsStore.GetMode();
+            AppendMenu(menu, MfString | (mode == AppMode.Gui ? MfChecked : 0u), TrayMenuModeGui, Text("ModeGui"));
+            AppendMenu(
+                menu,
+                MfString | (mode == AppMode.Background ? MfChecked : 0u),
+                TrayMenuModeBackground,
+                Text("ModeBackground"));
+            AppendMenu(menu, MfSeparator, 0, string.Empty);
             AppendMenu(menu, MfString, TrayMenuExit, Text("Exit"));
             SetForegroundWindow(_hwnd);
             var command = TrackPopupMenu(menu, TpmRightButton | TpmReturnCmd, point.X, point.Y, 0, _hwnd, IntPtr.Zero);
@@ -883,6 +980,12 @@ public sealed partial class MainWindow : Window
                 break;
             case TrayMenuMute:
                 SetVolumeDirect(0);
+                break;
+            case TrayMenuModeGui:
+                SwitchMode(AppMode.Gui);
+                break;
+            case TrayMenuModeBackground:
+                SwitchMode(AppMode.Background);
                 break;
             case TrayMenuGainLow:
                 _ = RunTrayDeviceActionAsync(() => _device.TrySetGainAsync(0), () => GainButtons.SelectedIndex = 0, Text("GainUpdated"));
@@ -1007,6 +1110,7 @@ public sealed partial class MainWindow : Window
 
     private void CleanupNativeResources()
     {
+        _exitRequestTimer.Stop();
         _deviceChangeRefreshCts?.Cancel();
         _deviceChangeRefreshCts?.Dispose();
         _deviceChangeRefreshCts = null;
@@ -1033,6 +1137,11 @@ public sealed partial class MainWindow : Window
             DestroyIcon(_trayIconHandle);
             _trayIconHandle = IntPtr.Zero;
         }
+
+        // Last, and only if this process is the recorded owner: whoever is waiting to take over is
+        // watching for running.json to disappear, and should not see it go while the shortcuts and the
+        // device notifications above are still live.
+        ModeArbitration.Release();
     }
 
     private IntPtr WindowSubclassProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData)
@@ -1685,6 +1794,18 @@ public sealed partial class MainWindow : Window
             "TrayGainTitle" => zh ? "增益" : "Gain",
             "TrayLedTitle" => zh ? "LED" : "LED",
             "TrayFilterTitle" => zh ? "滤波器" : "Filter",
+            "TrayModeTitle" => zh ? "运行模式" : "Run mode",
+            "ModeGui" => zh ? "窗口模式" : "Window mode",
+            "ModeBackground" => zh ? "后台模式（仅快捷键）" : "Background mode (shortcuts only)",
+            "ModeGuiApplied" => zh
+                ? "已设为窗口模式，开机自启将启动此窗口。"
+                : "Window mode set; auto-start will launch this window.",
+            "ModeSwitchFailed" => zh
+                ? "后台进程启动失败，已保持窗口模式。"
+                : "The background process would not start; staying in window mode.",
+            "BackgroundExeMissing" => zh
+                ? "此目录下没有 Dawn44.Background.exe，无法切换到后台模式。"
+                : "Dawn44.Background.exe is not installed here, so background mode is unavailable.",
             "Exit" => zh ? "退出" : "Exit",
             _ => key,
         };
@@ -1723,10 +1844,26 @@ public sealed partial class MainWindow : Window
 
     private static bool ApplyStartupRegistration(bool enabled)
     {
-        // Passing null for the executable resolves the current process. Run-as-administrator makes
-        // the scheduled task the preferred mechanism, because an elevated app cannot auto-start from
-        // the HKCU Run key without a logon-time UAC prompt that nobody answers.
-        return StartupRegistration.Apply(enabled, null, App.TraySwitch, SettingsStore.GetRunAsAdmin());
+        // The logon entry has to name the executable for the mode the user chose, not whichever one
+        // happens to be applying it — this is the step that is easy to miss, and missing it means a
+        // switch to background mode still starts the window at the next logon. Null means "this
+        // process", which is both the answer for GUI mode and the fallback when the resident is not
+        // installed beside us.
+        var mode = SettingsStore.GetMode();
+        var exePath = mode == AppMode.Background ? ModeExecutable.Resolve(AppMode.Background) : null;
+        if (mode == AppMode.Background && exePath is null)
+        {
+            mode = AppMode.Gui;
+        }
+
+        // Run-as-administrator makes the scheduled task the preferred mechanism, because an elevated
+        // app cannot auto-start from the HKCU Run key without a logon-time UAC prompt that nobody
+        // answers.
+        return StartupRegistration.Apply(
+            enabled,
+            exePath,
+            ModeExecutable.ArgumentsFor(mode),
+            SettingsStore.GetRunAsAdmin());
     }
 
     private static int Clamp(int value, int minimum, int maximum)

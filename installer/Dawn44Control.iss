@@ -1,5 +1,5 @@
 #define MyAppName "Dawn4.4 Control"
-#define MyAppVersion "1.0.18"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "FADURANE"
 #define MyAppExeName "Dawn44.WinUI.exe"
 #define SourceDir "..\Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged"
@@ -37,6 +37,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+; The publish directory also holds Dawn44.Background.exe, which the build copies in beside the GUI:
+; the two exes find each other by file name in a shared directory (ModeExecutable.Resolve), so they
+; must stay side by side.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb"
 Source: "{#WinAppRuntimeDir}\Microsoft.WindowsAppRuntime.Main.2.msix"; DestDir: "{tmp}\WinAppRuntime"; Flags: deleteafterinstall
 Source: "{#WinAppRuntimeDir}\Microsoft.WindowsAppRuntime.Singleton.2.msix"; DestDir: "{tmp}\WinAppRuntime"; Flags: deleteafterinstall

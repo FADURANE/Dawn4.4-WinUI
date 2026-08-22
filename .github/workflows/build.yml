@@ -82,6 +82,18 @@ jobs:
           $exe = Get-Item "$env:BACKGROUND_PUBLISH_DIR\Dawn44.Background.exe"
           "Dawn44.Background.exe on disk: {0:N2} MB" -f ($exe.Length / 1MB)
 
+      # Both exes have to end up in the same directory: each resolves the other by file name from its
+      # own location (ModeExecutable.Resolve), which is what lets a mode switch and the logon entry
+      # find the executable they need. Copying into the publish directory covers the installer and the
+      # release zip at once, since both are built from it.
+      - name: Stage background exe beside the app
+        shell: pwsh
+        run: |
+          Copy-Item `
+            -Path "$env:BACKGROUND_PUBLISH_DIR\Dawn44.Background.exe" `
+            -Destination $env:PUBLISH_DIR `
+            -Force
+
       - name: Archive for release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh

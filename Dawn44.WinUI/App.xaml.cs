@@ -27,7 +27,7 @@ namespace Dawn44.WinUI
     /// </summary>
     public partial class App : Application
     {
-        internal const string TraySwitch = "--tray";
+        internal const string TraySwitch = ModeExecutable.TraySwitch;
         internal const string ElevatedRelaunchSwitch = Elevation.ElevatedRelaunchSwitch;
 
         private Window? _window;
@@ -60,6 +60,8 @@ namespace Dawn44.WinUI
             }
 
             // Auto-restart as admin if the user has requested it and we're not yet elevated.
+            // Deliberately settled before arbitration: the handover that follows then happens between
+            // two processes at the same integrity level.
             if (!isElevatedRelaunch && SettingsStore.GetRunAsAdmin() && !Elevation.IsCurrentProcessElevated())
             {
                 // Hand the single-instance mutex to the elevated child before starting it,
@@ -75,6 +77,24 @@ namespace Dawn44.WinUI
                 // Elevation was declined or is unattended (a logon-time UAC prompt nobody
                 // answers). Continue unelevated rather than silently failing to start.
                 SingleInstanceManager.TryAcquire();
+            }
+
+            // The mutex above only catches a second GUI at the same integrity level — a named object
+            // created by an elevated instance cannot be opened from medium integrity, which is exactly
+            // the case where two windows used to appear. running.json has no such blind spot, and it is
+            // also what the headless resident publishes, so this one call covers both.
+            switch (ModeArbitration.TakeOver(AppMode.Gui))
+            {
+                case TakeOverResult.SameModeAlreadyRunning:
+                    SingleInstanceManager.NotifyExistingInstance();
+                    Environment.Exit(0);
+                    return;
+
+                case TakeOverResult.OtherModeDidNotRelease:
+                    // The resident would not step aside; TakeOver has logged why. Two owners fighting
+                    // over the HID handle and the shortcuts is worse than not starting.
+                    Environment.Exit(1);
+                    return;
             }
 
             try

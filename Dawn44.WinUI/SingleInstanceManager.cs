@@ -16,11 +16,23 @@ internal static class SingleInstanceManager
 
     public static bool TryAcquire()
     {
-        var mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
-        if (createdNew)
+        Mutex mutex;
+        try
         {
-            _mutex = mutex;
-            return true;
+            mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
+            if (createdNew)
+            {
+                _mutex = mutex;
+                return true;
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The mutex exists but belongs to a higher integrity level: an elevated instance created
+            // it, and mandatory integrity policy denies MODIFY_STATE to this medium-integrity token.
+            // The name resolving at all is proof that an instance is running, which is the only thing
+            // this method is asked to decide.
+            return false;
         }
 
         mutex.Dispose();
