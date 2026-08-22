@@ -66,6 +66,8 @@ internal static class Program
         var volume = new VolumeController(device)
         {
             Faulted = ex => DiagnosticLog.Write("Volume worker fault.", ex),
+            // Rare by design, and the only trace of a keypress that was deliberately not applied.
+            ReadRejected = message => DiagnosticLog.Write(message),
         };
         volume.Start();
 
