@@ -20,6 +20,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!--
+      TrayHost talks to Shell_NotifyIcon and RegisterClass with blittable structures — fixed char
+      buffers and a function-pointer window procedure — so that ILC has no marshalling stub to emit.
+      All of that needs an unsafe context.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <EventSourceSupport>false</EventSourceSupport>

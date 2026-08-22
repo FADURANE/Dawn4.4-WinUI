@@ -942,18 +942,14 @@ public sealed partial class MainWindow : Window
             AppendMenu(menu, MfSeparator, 0, string.Empty);
             AppendMenu(menu, MfString | MfDisabled, 0, Text("TrayModeTitle"));
 
-            // This menu only exists in the GUI process, so the window is always the mode running right
-            // now and is labelled as such. The check mark answers the other question — which executable
-            // the next logon starts — because that is the only one the two items can change.
-            var startupMode = SettingsStore.GetMode();
+            // Mode is written by whichever executable owns the session, so the check mark is both what
+            // is running now and what the next logon will start — the resident's own tray menu says
+            // the same thing from the other side.
+            var mode = SettingsStore.GetMode();
+            AppendMenu(menu, MfString | (mode == AppMode.Gui ? MfChecked : 0u), TrayMenuModeGui, Text("ModeGui"));
             AppendMenu(
                 menu,
-                MfString | (startupMode == AppMode.Gui ? MfChecked : 0u),
-                TrayMenuModeGui,
-                Text("ModeGui") + Text("ModeCurrentSuffix"));
-            AppendMenu(
-                menu,
-                MfString | (startupMode == AppMode.Background ? MfChecked : 0u),
+                MfString | (mode == AppMode.Background ? MfChecked : 0u),
                 TrayMenuModeBackground,
                 Text("ModeBackground"));
             AppendMenu(menu, MfSeparator, 0, string.Empty);
@@ -1806,10 +1802,9 @@ public sealed partial class MainWindow : Window
             "TrayGainTitle" => zh ? "增益" : "Gain",
             "TrayLedTitle" => zh ? "LED" : "LED",
             "TrayFilterTitle" => zh ? "滤波器" : "Filter",
-            "TrayModeTitle" => zh ? "启动模式" : "Startup mode",
+            "TrayModeTitle" => zh ? "运行模式" : "Run mode",
             "ModeGui" => zh ? "窗口模式" : "Window mode",
             "ModeBackground" => zh ? "后台模式（仅快捷键）" : "Background mode (shortcuts only)",
-            "ModeCurrentSuffix" => zh ? "（当前）" : " (current)",
             "ModeGuiApplied" => zh
                 ? "已设为窗口模式，开机自启将启动此窗口。"
                 : "Window mode set; auto-start will launch this window.",
@@ -1857,26 +1852,8 @@ public sealed partial class MainWindow : Window
 
     private static bool ApplyStartupRegistration(bool enabled)
     {
-        // The logon entry has to name the executable for the mode the user chose, not whichever one
-        // happens to be applying it — this is the step that is easy to miss, and missing it means a
-        // switch to background mode still starts the window at the next logon. Null means "this
-        // process", which is both the answer for GUI mode and the fallback when the resident is not
-        // installed beside us.
-        var mode = SettingsStore.GetMode();
-        var exePath = mode == AppMode.Background ? ModeExecutable.Resolve(AppMode.Background) : null;
-        if (mode == AppMode.Background && exePath is null)
-        {
-            mode = AppMode.Gui;
-        }
-
-        // Run-as-administrator makes the scheduled task the preferred mechanism, because an elevated
-        // app cannot auto-start from the HKCU Run key without a logon-time UAC prompt that nobody
-        // answers.
-        return StartupRegistration.Apply(
-            enabled,
-            exePath,
-            ModeExecutable.ArgumentsFor(mode),
-            SettingsStore.GetRunAsAdmin());
+        // The mode-aware part lives in Core because the resident applies the same entry.
+        return StartupRegistration.ApplyForCurrentMode(enabled);
     }
 
     private static int Clamp(int value, int minimum, int maximum)

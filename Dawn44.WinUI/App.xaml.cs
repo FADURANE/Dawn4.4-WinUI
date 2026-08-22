@@ -97,6 +97,12 @@ namespace Dawn44.WinUI
                     return;
             }
 
+            // Whatever started this process — the shortcut, the logon entry, or a switch from the
+            // resident — the window is what is running now, so that is what Mode says and what the
+            // next logon starts. Only the mode written here; the logon entry itself is rewritten off
+            // the construction path, because creating the scheduled task can take a second.
+            SettingsStore.SaveMode(AppMode.Gui);
+
             try
             {
                 _window = new MainWindow(isTrayLaunch);

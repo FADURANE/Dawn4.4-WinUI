@@ -64,6 +64,43 @@ public static class StartupRegistration
         return SetRunRegistryValue(enabled ? $"\"{exePath}\" {arguments}" : null);
     }
 
+    /// <summary>
+    /// Applies the logon entry for whichever mode is recorded as current. This is how both
+    /// executables should call <see cref="Apply"/>.
+    /// </summary>
+    /// <remarks>
+    /// The entry has to name the executable for the recorded mode, not whichever one happens to be
+    /// applying it — miss that and a switch to background mode still starts the window at the next
+    /// logon. A null path means "this process", which is both the right answer in GUI mode and the
+    /// fallback when the resident turns out not to be installed beside us.
+    /// </remarks>
+    public static bool ApplyForCurrentMode(bool enabled)
+    {
+        var mode = SettingsStore.GetMode();
+        var exePath = mode == AppMode.Background ? ModeExecutable.Resolve(AppMode.Background) : null;
+        if (mode == AppMode.Background && exePath is null)
+        {
+            mode = AppMode.Gui;
+        }
+
+        return Apply(enabled, exePath, ModeExecutable.ArgumentsFor(mode), SettingsStore.GetRunAsAdmin());
+    }
+
+    /// <summary>
+    /// Records <paramref name="mode"/> as the one running and points the logon entry at it.
+    /// </summary>
+    /// <remarks>
+    /// Called by both executables as soon as they own the session, however they were started. That is
+    /// what makes <c>Mode</c> a description of what is actually running rather than a preference that
+    /// can silently disagree with it: the tray menu reads the same value, and the next logon restores
+    /// whatever was last running.
+    /// </remarks>
+    public static void ClaimCurrentMode(AppMode mode)
+    {
+        SettingsStore.SaveMode(mode);
+        ApplyForCurrentMode(SettingsStore.GetStartupEnabled());
+    }
+
     private static bool SetRunRegistryValue(string? command)
     {
         try
