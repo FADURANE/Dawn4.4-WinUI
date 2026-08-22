@@ -1,4 +1,5 @@
-﻿using Microsoft.UI.Xaml;
+﻿using Dawn44.Core;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Data;
@@ -27,7 +28,7 @@ namespace Dawn44.WinUI
     public partial class App : Application
     {
         internal const string TraySwitch = "--tray";
-        internal const string ElevatedRelaunchSwitch = "--elevated-relaunch";
+        internal const string ElevatedRelaunchSwitch = Elevation.ElevatedRelaunchSwitch;
 
         private Window? _window;
 
@@ -59,13 +60,13 @@ namespace Dawn44.WinUI
             }
 
             // Auto-restart as admin if the user has requested it and we're not yet elevated.
-            if (!isElevatedRelaunch && GetRunAsAdminSetting() && !IsCurrentProcessElevated())
+            if (!isElevatedRelaunch && SettingsStore.GetRunAsAdmin() && !Elevation.IsCurrentProcessElevated())
             {
                 // Hand the single-instance mutex to the elevated child before starting it,
                 // otherwise it sees this process as an existing instance and exits at once.
                 SingleInstanceManager.Release();
 
-                if (TryRestartAsAdmin(launchArguments))
+                if (Elevation.TryRestartAsAdmin(launchArguments))
                 {
                     Environment.Exit(0);
                     return;
@@ -108,55 +109,6 @@ namespace Dawn44.WinUI
         private static bool HasSwitch(string[] arguments, string name)
         {
             return arguments.Any(argument => string.Equals(argument, name, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private static bool GetRunAsAdminSetting()
-        {
-            try
-            {
-                var path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Dawn4.4 Control", "settings.json");
-                if (!File.Exists(path)) return false;
-                var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-                return doc.RootElement.TryGetProperty("RunAsAdmin", out var val) &&
-                       string.Equals(val.GetString(), "true", StringComparison.OrdinalIgnoreCase);
-            }
-            catch { return false; }
-        }
-
-        private static bool IsCurrentProcessElevated()
-        {
-            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            var principal = new System.Security.Principal.WindowsPrincipal(identity);
-            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-        }
-
-        private static bool TryRestartAsAdmin(string[] launchArguments)
-        {
-            try
-            {
-                var exePath = Environment.ProcessPath
-                    ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
-                var arguments = string.Join(
-                    ' ',
-                    launchArguments
-                        .Append(ElevatedRelaunchSwitch)
-                        .Select(argument => argument.Contains(' ') ? $"\"{argument}\"" : argument));
-                var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = exePath,
-                    Arguments = arguments,
-                    Verb = "runas",
-                    UseShellExecute = true,
-                });
-                return process is not null;
-            }
-            catch
-            {
-                // ERROR_CANCELLED (1223) when the consent prompt is refused or never answered.
-                return false;
-            }
         }
 
         private static void App_UnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)

@@ -50,6 +50,16 @@
   </ItemGroup>
 
   <!--
+    Dawn44.Core holds the HID protocol, the settings store, the hotkey poll loop and the
+    startup registration, all shared with the headless background executable. It targets
+    net8.0-windows (no CsWinRT projections) so it stays NativeAOT-publishable; referencing it
+    from this net8.0-windows10.0.19041.0 project is fine in that direction.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Dawn44.Core\Dawn44.Core.csproj" />
+  </ItemGroup>
+
+  <!--
     Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
     Explorer "Package and Publish" context menu entry to be enabled for this project even if
     the Windows App SDK Nuget package has not yet been restored.

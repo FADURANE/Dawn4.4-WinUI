@@ -1,17 +1,15 @@
-﻿using Microsoft.UI;
+﻿using Dawn44.Core;
+using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Win32;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using Windows.System;
@@ -21,31 +19,25 @@ namespace Dawn44.WinUI;
 
 public sealed partial class MainWindow : Window
 {
-    private static readonly string SettingsDirectory = System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Dawn4.4 Control");
-    private static readonly string SettingsFilePath = System.IO.Path.Combine(SettingsDirectory, "settings.json");
-    private static Dictionary<string, string>? _settingsCache;
     private static readonly Guid HidClassGuid = new("4D1E55B2-F16F-11CF-88CB-001111000030");
 
     private const int DefaultWindowWidth = 660;
     private const int DefaultWindowHeight = 1460;
     private const int HotkeyVolumeUp = 0x4441;
     private const int HotkeyVolumeDown = 0x4442;
-    private const int VolumeWriteIntervalMs = 28;
-    private const int MaxVolumeStepPerWrite = 2;
-    private const uint ModAlt = 0x0001;
-    private const uint ModControl = 0x0002;
-    private const uint ModShift = 0x0004;
-    private const uint ModWin = 0x0008;
-    private const uint ModAltControl = ModAlt | ModControl;
-    private const uint VkUp = 0x26;
-    private const uint VkDown = 0x28;
-    private const int VkShift = 0x10;
-    private const int VkControl = 0x11;
-    private const int VkMenu = 0x12;
-    private const int VkLWin = 0x5B;
-    private const int VkRWin = 0x5C;
+    // Aliases for Dawn44.Core so the ~20 call sites below stay untouched.
+    private const uint ModAlt = HotkeyModifiers.Alt;
+    private const uint ModControl = HotkeyModifiers.Control;
+    private const uint ModShift = HotkeyModifiers.Shift;
+    private const uint ModWin = HotkeyModifiers.Win;
+    private const uint ModAltControl = HotkeyModifiers.AltControl;
+    private const uint VkUp = HotkeyVirtualKeys.Up;
+    private const uint VkDown = HotkeyVirtualKeys.Down;
+    private const int VkShift = HotkeyVirtualKeys.Shift;
+    private const int VkControl = HotkeyVirtualKeys.Control;
+    private const int VkMenu = HotkeyVirtualKeys.Menu;
+    private const int VkLWin = HotkeyVirtualKeys.LeftWin;
+    private const int VkRWin = HotkeyVirtualKeys.RightWin;
     private const int WmNull = 0x0000;
     private const int WmHotkey = 0x0312;
     private const int WmSize = 0x0005;
@@ -90,38 +82,24 @@ public sealed partial class MainWindow : Window
     private const uint MfString = 0x00000000;
     private const uint MfDisabled = 0x00000002;
     private const uint MfSeparator = 0x00000800;
-    private const string RunRegistryPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string RunRegistryName = "Dawn4.4 Control";
-    private const string StartupTaskName = "Dawn4.4 Control Startup";
-    private const int SchTasksTimeoutMs = 10000;
-    private const string CloseBehaviorKey = "CloseBehavior";
-    private const string BackgroundImageTokenKey = "BackgroundImageToken";
-    private const string BackgroundImageNameKey = "BackgroundImageName";
-    private const string BackgroundZoomKey = "BackgroundZoom";
-    private const string BackgroundOffsetXKey = "BackgroundOffsetX";
-    private const string BackgroundOffsetYKey = "BackgroundOffsetY";
-    private const string ResizeLockedKey = "ResizeLocked";
-    private const string LanguageKey = "Language";
-    private const string HotkeyVolumeUpModifiersKey = "HotkeyVolumeUpModifiers";
-    private const string HotkeyVolumeUpVkKey = "HotkeyVolumeUpVk";
-    private const string HotkeyVolumeDownModifiersKey = "HotkeyVolumeDownModifiers";
-    private const string HotkeyVolumeDownVkKey = "HotkeyVolumeDownVk";
-    private const string StartupEnabledKey = "StartupEnabled";
-    private const string HotkeyOsdEnabledKey = "HotkeyOsdEnabled";
-    private const string RunAsAdminKey = "RunAsAdmin";
+    // Only the keys still named at a call site are aliased; the rest are reached through the typed
+    // SettingsStore accessors.
+    private const string BackgroundImageTokenKey = SettingsStore.BackgroundImageTokenKey;
+    private const string BackgroundImageNameKey = SettingsStore.BackgroundImageNameKey;
+    private const string BackgroundZoomKey = SettingsStore.BackgroundZoomKey;
+    private const string BackgroundOffsetXKey = SettingsStore.BackgroundOffsetXKey;
+    private const string BackgroundOffsetYKey = SettingsStore.BackgroundOffsetYKey;
 
     private readonly DawnHidDevice _device = new();
+    private readonly VolumeWriteQueue _volumeWriteQueue;
+    private readonly HotkeyWatcher _hotkeyWatcher;
     private readonly IntPtr _hwnd;
     private readonly AppWindow _appWindow;
     private readonly SubclassProc _subclassProc;
-    private readonly object _volumeWriteLock = new();
-    private int? _queuedVolume;
-    private int? _lastAppliedVolume;
     private IntPtr _trayIconHandle;
     private IntPtr _deviceNotificationHandle;
     private CancellationTokenSource? _deviceChangeRefreshCts;
     private VolumeOsdWindow? _volumeOsdWindow;
-    private bool _isVolumeWriteLoopActive;
     private bool _trayIconVisible;
     private bool _isLoading;
     private bool _isApplying;
@@ -134,7 +112,6 @@ public sealed partial class MainWindow : Window
     private string? _cachedBackgroundName;
     private bool _startMinimizedToTray;
     private bool _isHiddenToTray;
-    private CancellationTokenSource? _hotkeyPollCts;
     private string _language = "en";
     private HotkeyCaptureTarget _hotkeyCaptureTarget = HotkeyCaptureTarget.None;
 
@@ -145,11 +122,19 @@ public sealed partial class MainWindow : Window
         VolumeDown,
     }
 
-    private readonly record struct HotkeySetting(uint Modifiers, uint Vk);
-
     public MainWindow(bool startMinimizedToTray = false)
     {
         InitializeComponent();
+        _volumeWriteQueue = new VolumeWriteQueue(_device);
+        _volumeWriteQueue.TargetReached += OnVolumeTargetReached;
+        _volumeWriteQueue.WriteFailed += OnVolumeWriteFailed;
+        _volumeWriteQueue.Faulted += OnVolumeWriteFaulted;
+        // Delegates, not values: a shortcut changed in Settings takes effect on the next tick.
+        _hotkeyWatcher = new HotkeyWatcher(
+            SettingsStore.GetVolumeUpHotkey,
+            SettingsStore.GetVolumeDownHotkey,
+            () => ChangeVolumeBy(1),
+            () => ChangeVolumeBy(-1));
         _startMinimizedToTray = startMinimizedToTray;
         // Set before LoadSettingsUi so the background loader knows not to decode into a hidden window.
         _isHiddenToTray = startMinimizedToTray;
@@ -251,11 +236,11 @@ public sealed partial class MainWindow : Window
 
         if (_hotkeyCaptureTarget == HotkeyCaptureTarget.VolumeUp)
         {
-            SaveHotkey(HotkeyVolumeUpModifiersKey, HotkeyVolumeUpVkKey, hotkey);
+            SettingsStore.SaveVolumeUpHotkey(hotkey);
         }
         else
         {
-            SaveHotkey(HotkeyVolumeDownModifiersKey, HotkeyVolumeDownVkKey, hotkey);
+            SettingsStore.SaveVolumeDownHotkey(hotkey);
         }
 
         _hotkeyCaptureTarget = HotkeyCaptureTarget.None;
@@ -549,105 +534,28 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        lock (_volumeWriteLock)
+        _volumeWriteQueue.Enqueue(volume);
+    }
+
+    // The queue raises these on a worker thread, so every one of them marshals to the UI thread.
+    private void OnVolumeTargetReached(int volume)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+            ShowStatus(InfoBarSeverity.Success, Text("Applied"), string.Format(Text("VolumeApplied"), volume)));
+    }
+
+    private void OnVolumeWriteFailed()
+    {
+        DispatcherQueue.TryEnqueue(() =>
         {
-            _queuedVolume = Clamp(volume, 0, 60);
-            if (_isVolumeWriteLoopActive)
-            {
-                return;
-            }
-
-            _isVolumeWriteLoopActive = true;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                while (true)
-                {
-                    int targetVolume;
-                    int volumeToApply;
-                    lock (_volumeWriteLock)
-                    {
-                        if (_queuedVolume is null)
-                        {
-                            _isVolumeWriteLoopActive = false;
-                            return;
-                        }
-
-                        targetVolume = _queuedVolume.Value;
-                        volumeToApply = MoveToward(_lastAppliedVolume ?? targetVolume, targetVolume, MaxVolumeStepPerWrite);
-                    }
-
-                    if (_lastAppliedVolume != volumeToApply)
-                    {
-                        var applied = await _device.TrySetVolumeAsync(volumeToApply);
-                        if (!applied)
-                        {
-                            lock (_volumeWriteLock)
-                            {
-                                _queuedVolume = null;
-                                _isVolumeWriteLoopActive = false;
-                            }
-
-                            DispatcherQueue.TryEnqueue(() =>
-                            {
-                                SetDeviceConnected(false);
-                                ShowDeviceDisconnectedStatus();
-                            });
-                            return;
-                        }
-
-                        var reachedTarget = false;
-                        lock (_volumeWriteLock)
-                        {
-                            _lastAppliedVolume = volumeToApply;
-                            if (_queuedVolume == targetVolume && volumeToApply == targetVolume)
-                            {
-                                _queuedVolume = null;
-                                reachedTarget = true;
-                            }
-                        }
-
-                        if (reachedTarget)
-                        {
-                            DispatcherQueue.TryEnqueue(() => ShowStatus(InfoBarSeverity.Success, Text("Applied"), string.Format(Text("VolumeApplied"), volumeToApply)));
-                        }
-                    }
-                    else
-                    {
-                        lock (_volumeWriteLock)
-                        {
-                            if (_queuedVolume == targetVolume)
-                            {
-                                _queuedVolume = null;
-                            }
-                        }
-                    }
-
-                    await Task.Delay(VolumeWriteIntervalMs);
-                }
-            }
-            catch (Exception ex)
-            {
-                lock (_volumeWriteLock)
-                {
-                    _queuedVolume = null;
-                    _isVolumeWriteLoopActive = false;
-                }
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (ex is OperationCanceledException)
-                    {
-                        return;
-                    }
-
-                    ShowStatus(InfoBarSeverity.Error, Text("VolumeFailed"), ex.Message);
-                });
-            }
+            SetDeviceConnected(false);
+            ShowDeviceDisconnectedStatus();
         });
+    }
+
+    private void OnVolumeWriteFaulted(Exception ex)
+    {
+        DispatcherQueue.TryEnqueue(() => ShowStatus(InfoBarSeverity.Error, Text("VolumeFailed"), ex.Message));
     }
 
     private async Task RunDeviceActionAsync(Func<Task<bool>> action, string? successMessage)
@@ -691,7 +599,7 @@ public sealed partial class MainWindow : Window
         {
             VolumeSlider.Value = state.Volume;
             VolumeText.Text = state.Volume.ToString();
-            _lastAppliedVolume = state.Volume;
+            _volumeWriteQueue.SetLastApplied(state.Volume);
         }
 
         if (state.Filter >= 0)
@@ -1082,82 +990,7 @@ public sealed partial class MainWindow : Window
         UnregisterHotKey(_hwnd, HotkeyVolumeDown);
 
         // Start GetAsyncKeyState polling — bypasses low-level keyboard hooks (e.g. EasyAntiCheat)
-        _hotkeyPollCts?.Cancel();
-        _hotkeyPollCts?.Dispose();
-        _hotkeyPollCts = new CancellationTokenSource();
-        _ = HotkeyPollLoopAsync(_hotkeyPollCts.Token);
-    }
-
-    [DllImport("user32.dll")]
-    private static extern short GetAsyncKeyState(int vKey);
-
-    private static bool IsVkDown(int vk) => (GetAsyncKeyState(vk) & unchecked((short)0x8000)) != 0;
-
-    private static bool IsHotkeyComboActive(HotkeySetting h)
-    {
-        if (h.Vk == 0) return false;
-        if (!IsVkDown((int)h.Vk)) return false;
-        if ((h.Modifiers & ModControl) != 0 && !IsVkDown(VkControl)) return false;
-        if ((h.Modifiers & ModAlt) != 0 && !IsVkDown(VkMenu)) return false;
-        if ((h.Modifiers & ModShift) != 0 && !IsVkDown(VkShift)) return false;
-        if ((h.Modifiers & ModWin) != 0 && !IsVkDown(VkLWin) && !IsVkDown(VkRWin)) return false;
-        return true;
-    }
-
-    private async Task HotkeyPollLoopAsync(CancellationToken ct)
-    {
-        const int PollMs = 15;
-        const int RepeatDelayMs = 400;
-        const int RepeatIntervalMs = 80;
-
-        bool upHeld = false, downHeld = false;
-        int upHeldMs = 0, downHeldMs = 0;
-
-        while (!ct.IsCancellationRequested)
-        {
-            try { await Task.Delay(PollMs, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return; }
-
-            var up = GetVolumeUpHotkey();
-            var down = GetVolumeDownHotkey();
-
-            bool upNow = IsHotkeyComboActive(up);
-            bool downNow = IsHotkeyComboActive(down);
-
-            // Volume up
-            if (upNow)
-            {
-                if (!upHeld)
-                {
-                    upHeldMs = 0;
-                    DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(1));
-                }
-                else
-                {
-                    upHeldMs += PollMs;
-                    if (upHeldMs >= RepeatDelayMs && (upHeldMs - RepeatDelayMs) % RepeatIntervalMs < PollMs)
-                        DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(1));
-                }
-            }
-            upHeld = upNow;
-
-            // Volume down
-            if (downNow)
-            {
-                if (!downHeld)
-                {
-                    downHeldMs = 0;
-                    DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(-1));
-                }
-                else
-                {
-                    downHeldMs += PollMs;
-                    if (downHeldMs >= RepeatDelayMs && (downHeldMs - RepeatDelayMs) % RepeatIntervalMs < PollMs)
-                        DispatcherQueue.TryEnqueue(() => ChangeVolumeBy(-1));
-                }
-            }
-            downHeld = downNow;
-        }
+        _hotkeyWatcher.Start();
     }
 
     private void RegisterHidDeviceNotifications()
@@ -1187,9 +1020,7 @@ public sealed partial class MainWindow : Window
 
         UnregisterHotKey(_hwnd, HotkeyVolumeUp);
         UnregisterHotKey(_hwnd, HotkeyVolumeDown);
-        _hotkeyPollCts?.Cancel();
-        _hotkeyPollCts?.Dispose();
-        _hotkeyPollCts = null;
+        _hotkeyWatcher.Stop();
         RemoveWindowSubclass(_hwnd, _subclassProc, UIntPtr.Zero);
         if (_trayIconVisible)
         {
@@ -1350,48 +1181,26 @@ public sealed partial class MainWindow : Window
         BackgroundAdjustPanel.Visibility = Visibility.Visible;
     }
 
-    private static string? GetCloseBehavior()
-    {
-        return GetStringSetting(CloseBehaviorKey, "Ask");
-    }
+    // Everything below forwards to Dawn44.Core.SettingsStore, which is the single reader/writer for
+    // settings.json and is shared with the headless background executable. The one-line wrappers are
+    // kept so the ~90 call sites in this file stay as they were.
+    private static string? GetCloseBehavior() => SettingsStore.GetCloseBehavior();
 
-    private static void SaveCloseBehavior(string behavior)
-    {
-        SaveSetting(CloseBehaviorKey, behavior);
-    }
+    private static void SaveCloseBehavior(string behavior) => SettingsStore.SaveCloseBehavior(behavior);
 
-    private static bool GetStartupEnabled()
-    {
-        return GetBoolSetting(StartupEnabledKey, false);
-    }
+    private static bool GetStartupEnabled() => SettingsStore.GetStartupEnabled();
 
-    private static void SaveStartupEnabled(bool enabled)
-    {
-        SaveSetting(StartupEnabledKey, enabled ? "true" : "false");
-    }
+    private static void SaveStartupEnabled(bool enabled) => SettingsStore.SaveStartupEnabled(enabled);
 
-    private static bool GetHotkeyOsdEnabled()
-    {
-        return GetBoolSetting(HotkeyOsdEnabledKey, true);
-    }
+    private static bool GetHotkeyOsdEnabled() => SettingsStore.GetHotkeyOsdEnabled();
 
-    private static void SaveHotkeyOsdEnabled(bool enabled)
-    {
-        SaveSetting(HotkeyOsdEnabledKey, enabled ? "true" : "false");
-    }
+    private static void SaveHotkeyOsdEnabled(bool enabled) => SettingsStore.SaveHotkeyOsdEnabled(enabled);
 
-    private static bool GetRunAsAdmin()
-        => GetBoolSetting(RunAsAdminKey, false);
+    private static bool GetRunAsAdmin() => SettingsStore.GetRunAsAdmin();
 
-    private static void SaveRunAsAdmin(bool enabled)
-        => SaveSetting(RunAsAdminKey, enabled ? "true" : "false");
+    private static void SaveRunAsAdmin(bool enabled) => SettingsStore.SaveRunAsAdmin(enabled);
 
-    private static bool IsCurrentProcessElevated()
-    {
-        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-        var principal = new System.Security.Principal.WindowsPrincipal(identity);
-        return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-    }
+    private static bool IsCurrentProcessElevated() => Elevation.IsCurrentProcessElevated();
 
     private void RestartAsAdmin()
     {
@@ -1399,185 +1208,44 @@ public sealed partial class MainWindow : Window
         // is still alive, and would otherwise treat itself as a duplicate and exit immediately.
         SingleInstanceManager.Release();
 
-        try
+        // The window is visible right now, so do not carry --tray into the restarted instance.
+        if (Elevation.TryRestartAsAdmin(Environment.GetCommandLineArgs().Skip(1), App.TraySwitch))
         {
-            var exePath = Environment.ProcessPath
-                ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
-            var cmdArgs = Environment.GetCommandLineArgs();
-            // The window is visible right now, so do not carry --tray into the restarted instance.
-            var extraArgs = string.Join(
-                ' ',
-                cmdArgs
-                    .Skip(1)
-                    .Where(argument => !string.Equals(argument, App.TraySwitch, StringComparison.OrdinalIgnoreCase))
-                    .Append(App.ElevatedRelaunchSwitch));
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = exePath,
-                Arguments = extraArgs,
-                Verb = "runas",
-                UseShellExecute = true,
-            });
             ExitApplication();
+            return;
         }
-        catch
-        {
-            // User cancelled the UAC prompt — keep running and revert the toggle.
-            SingleInstanceManager.TryAcquire();
-            _isLoadingSettings = true;
-            AdminSwitch.IsOn = false;
-            _isLoadingSettings = false;
-            SaveRunAsAdmin(false);
-        }
+
+        // User cancelled the UAC prompt — keep running and revert the toggle.
+        SingleInstanceManager.TryAcquire();
+        _isLoadingSettings = true;
+        AdminSwitch.IsOn = false;
+        _isLoadingSettings = false;
+        SaveRunAsAdmin(false);
     }
 
-    private static HotkeySetting GetVolumeUpHotkey()
-    {
-        return GetHotkey(HotkeyVolumeUpModifiersKey, HotkeyVolumeUpVkKey, new HotkeySetting(ModAltControl, VkUp));
-    }
+    private static string GetLanguage() => SettingsStore.GetLanguage();
 
-    private static HotkeySetting GetVolumeDownHotkey()
-    {
-        return GetHotkey(HotkeyVolumeDownModifiersKey, HotkeyVolumeDownVkKey, new HotkeySetting(ModAltControl, VkDown));
-    }
+    private static void SaveLanguage(string language) => SettingsStore.SaveLanguage(language);
 
-    private static HotkeySetting GetHotkey(string modifiersKey, string vkKey, HotkeySetting defaultValue)
-    {
-        var modifiers = GetUIntSetting(modifiersKey, defaultValue.Modifiers);
-        var vk = GetUIntSetting(vkKey, defaultValue.Vk);
+    private static string NormalizeLanguage(string? language) => SettingsStore.NormalizeLanguage(language);
 
-        return modifiers == 0 || vk == 0
-            ? defaultValue
-            : new HotkeySetting(modifiers, vk);
-    }
+    private static bool GetResizeLocked() => SettingsStore.GetResizeLocked();
 
-    private static uint ConvertSettingToUInt32(string? value, uint defaultValue)
-    {
-        return uint.TryParse(value, out var parsed) ? parsed : defaultValue;
-    }
+    private static void SaveResizeLocked(bool locked) => SettingsStore.SaveResizeLocked(locked);
 
-    private static void SaveHotkey(string modifiersKey, string vkKey, HotkeySetting hotkey)
-    {
-        SaveSetting(modifiersKey, hotkey.Modifiers.ToString());
-        SaveSetting(vkKey, hotkey.Vk.ToString());
-    }
+    private static string? GetBackgroundImageToken() => SettingsStore.GetBackgroundImageToken();
 
-    private static string GetLanguage()
-    {
-        return NormalizeLanguage(GetStringSetting(LanguageKey, null));
-    }
-
-    private static void SaveLanguage(string language)
-    {
-        SaveSetting(LanguageKey, NormalizeLanguage(language));
-    }
-
-    private static string NormalizeLanguage(string? language)
-    {
-        return string.Equals(language, "zh", StringComparison.OrdinalIgnoreCase) ? "zh" : "en";
-    }
-
-    private static bool GetResizeLocked()
-    {
-        return GetBoolSetting(ResizeLockedKey, true);
-    }
-
-    private static void SaveResizeLocked(bool locked)
-    {
-        SaveSetting(ResizeLockedKey, locked ? "true" : "false");
-    }
-
-    private static string? GetBackgroundImageToken()
-    {
-        return GetStringSetting(BackgroundImageTokenKey, null);
-    }
-
-    private static string? GetBackgroundImageName()
-    {
-        return GetStringSetting(BackgroundImageNameKey, null);
-    }
+    private static string? GetBackgroundImageName() => SettingsStore.GetBackgroundImageName();
 
     private static double GetDoubleSetting(string key, double defaultValue)
-    {
-        var value = GetStringSetting(key, null);
-        return double.TryParse(value, out var parsed) ? parsed : defaultValue;
-    }
+        => SettingsStore.GetDoubleSetting(key, defaultValue);
 
     private static void SaveDoubleSetting(string key, double value)
-    {
-        SaveSetting(key, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-    }
+        => SettingsStore.SaveDoubleSetting(key, value);
 
-    private static string? GetStringSetting(string key, string? defaultValue)
-    {
-        return GetSettings().TryGetValue(key, out var value) ? value : defaultValue;
-    }
+    private static void SaveSetting(string key, string value) => SettingsStore.SaveSetting(key, value);
 
-    private static bool GetBoolSetting(string key, bool defaultValue)
-    {
-        var value = GetStringSetting(key, null);
-        return bool.TryParse(value, out var parsed) ? parsed : defaultValue;
-    }
-
-    private static uint GetUIntSetting(string key, uint defaultValue)
-    {
-        return ConvertSettingToUInt32(GetStringSetting(key, null), defaultValue);
-    }
-
-    private static void SaveSetting(string key, string value)
-    {
-        var settings = GetSettings();
-        settings[key] = value;
-        SaveSettings();
-    }
-
-    private static void RemoveSetting(string key)
-    {
-        var settings = GetSettings();
-        if (settings.Remove(key))
-        {
-            SaveSettings();
-        }
-    }
-
-    private static Dictionary<string, string> GetSettings()
-    {
-        if (_settingsCache is not null)
-        {
-            return _settingsCache;
-        }
-
-        try
-        {
-            if (System.IO.File.Exists(SettingsFilePath))
-            {
-                var json = System.IO.File.ReadAllText(SettingsFilePath);
-                _settingsCache = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
-                return _settingsCache;
-            }
-        }
-        catch
-        {
-            // Corrupt settings should not prevent the controller from opening.
-        }
-
-        _settingsCache = new();
-        return _settingsCache;
-    }
-
-    private static void SaveSettings()
-    {
-        try
-        {
-            System.IO.Directory.CreateDirectory(SettingsDirectory);
-            var json = JsonSerializer.Serialize(GetSettings(), new JsonSerializerOptions { WriteIndented = true });
-            System.IO.File.WriteAllText(SettingsFilePath, json);
-        }
-        catch
-        {
-            // Settings persistence is best-effort; device control should continue working.
-        }
-    }
+    private static void RemoveSetting(string key) => SettingsStore.RemoveSetting(key);
 
     private void LoadBackgroundAdjustmentUi()
     {
@@ -1710,12 +1378,7 @@ public sealed partial class MainWindow : Window
         _isDeviceConnected = connected;
         if (!connected)
         {
-            lock (_volumeWriteLock)
-            {
-                _queuedVolume = null;
-                _isVolumeWriteLoopActive = false;
-                _lastAppliedVolume = null;
-            }
+            _volumeWriteQueue.Reset();
         }
 
         SetDeviceControlsEnabled(connected && !_isApplying && !_isLoading);
@@ -1735,10 +1398,10 @@ public sealed partial class MainWindow : Window
         ShortcutDownLabelText.Text = Text("ShortcutDownLabel");
         ShortcutUpButton.Content = _hotkeyCaptureTarget == HotkeyCaptureTarget.VolumeUp
             ? Text("PressShortcut")
-            : FormatHotkey(GetVolumeUpHotkey());
+            : FormatHotkey(SettingsStore.GetVolumeUpHotkey());
         ShortcutDownButton.Content = _hotkeyCaptureTarget == HotkeyCaptureTarget.VolumeDown
             ? Text("PressShortcut")
-            : FormatHotkey(GetVolumeDownHotkey());
+            : FormatHotkey(SettingsStore.GetVolumeDownHotkey());
     }
 
     private bool TryBuildHotkeySetting(VirtualKey key, out HotkeySetting hotkey)
@@ -2060,208 +1723,15 @@ public sealed partial class MainWindow : Window
 
     private static bool ApplyStartupRegistration(bool enabled)
     {
-        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
-        if (enabled && string.IsNullOrWhiteSpace(exePath))
-        {
-            return false;
-        }
-
-        // An elevated app cannot auto-start from the HKCU Run key: Windows would have to raise a
-        // UAC consent prompt at logon, and when nothing answers it the process exits without ever
-        // showing a window. A scheduled task running at the highest available level starts
-        // elevated with no prompt at all, so that is used whenever Run-as-administrator is on.
-        if (enabled && GetRunAsAdmin() && TryCreateStartupTask(exePath!))
-        {
-            SetRunRegistryValue(null);
-            return true;
-        }
-
-        TryDeleteStartupTask();
-        return SetRunRegistryValue(enabled ? $"\"{exePath}\" {App.TraySwitch}" : null);
-    }
-
-    private static bool SetRunRegistryValue(string? command)
-    {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(RunRegistryPath, writable: true)
-                ?? Registry.CurrentUser.CreateSubKey(RunRegistryPath, writable: true);
-            if (key is null)
-            {
-                return false;
-            }
-
-            if (command is null)
-            {
-                key.DeleteValue(RunRegistryName, throwOnMissingValue: false);
-            }
-            else
-            {
-                key.SetValue(RunRegistryName, command);
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool TryCreateStartupTask(string exePath)
-    {
-        // Creating a HighestAvailable task needs administrator rights. When the app is not yet
-        // elevated this fails and the caller falls back to the Run key; the task is then created
-        // on the next elevated launch, because startup registration is re-applied at startup.
-        var xmlPath = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"Dawn44ControlStartup-{Guid.NewGuid():N}.xml");
-
-        try
-        {
-            // schtasks only accepts Unicode task definitions.
-            System.IO.File.WriteAllText(xmlPath, BuildStartupTaskXml(exePath), System.Text.Encoding.Unicode);
-            return RunSchTasks("/Create", "/TN", StartupTaskName, "/XML", xmlPath, "/F");
-        }
-        catch
-        {
-            return false;
-        }
-        finally
-        {
-            try
-            {
-                System.IO.File.Delete(xmlPath);
-            }
-            catch
-            {
-                // Temp file cleanup is best effort.
-            }
-        }
-    }
-
-    private static void TryDeleteStartupTask()
-    {
-        RunSchTasks("/Delete", "/TN", StartupTaskName, "/F");
-    }
-
-    private static bool RunSchTasks(params string[] arguments)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "schtasks.exe",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-
-            foreach (var argument in arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            return process.WaitForExit(SchTasksTimeoutMs) && process.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string BuildStartupTaskXml(string exePath)
-    {
-        string user;
-        using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
-        {
-            user = identity.Name;
-        }
-
-        var workingDirectory = System.IO.Path.GetDirectoryName(exePath) ?? string.Empty;
-
-        return $"""
-            <?xml version="1.0" encoding="UTF-16"?>
-            <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-              <RegistrationInfo>
-                <Description>Starts Dawn4.4 Control minimized to the notification area at logon.</Description>
-              </RegistrationInfo>
-              <Triggers>
-                <LogonTrigger>
-                  <Enabled>true</Enabled>
-                  <UserId>{Escape(user)}</UserId>
-                </LogonTrigger>
-              </Triggers>
-              <Principals>
-                <Principal id="Author">
-                  <UserId>{Escape(user)}</UserId>
-                  <LogonType>InteractiveToken</LogonType>
-                  <RunLevel>HighestAvailable</RunLevel>
-                </Principal>
-              </Principals>
-              <Settings>
-                <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-                <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-                <AllowHardTerminate>true</AllowHardTerminate>
-                <StartWhenAvailable>false</StartWhenAvailable>
-                <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-                <IdleSettings>
-                  <StopOnIdleEnd>false</StopOnIdleEnd>
-                  <RestartOnIdle>false</RestartOnIdle>
-                </IdleSettings>
-                <AllowStartOnDemand>true</AllowStartOnDemand>
-                <Enabled>true</Enabled>
-                <Hidden>false</Hidden>
-                <RunOnlyIfIdle>false</RunOnlyIfIdle>
-                <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-                <Priority>7</Priority>
-              </Settings>
-              <Actions Context="Author">
-                <Exec>
-                  <Command>{Escape(exePath)}</Command>
-                  <Arguments>{App.TraySwitch}</Arguments>
-                  <WorkingDirectory>{Escape(workingDirectory)}</WorkingDirectory>
-                </Exec>
-              </Actions>
-            </Task>
-            """;
-
-        static string Escape(string value) => value
-            .Replace("&", "&amp;")
-            .Replace("<", "&lt;")
-            .Replace(">", "&gt;")
-            .Replace("\"", "&quot;");
+        // Passing null for the executable resolves the current process. Run-as-administrator makes
+        // the scheduled task the preferred mechanism, because an elevated app cannot auto-start from
+        // the HKCU Run key without a logon-time UAC prompt that nobody answers.
+        return StartupRegistration.Apply(enabled, null, App.TraySwitch, SettingsStore.GetRunAsAdmin());
     }
 
     private static int Clamp(int value, int minimum, int maximum)
     {
-        return Math.Min(Math.Max(value, minimum), maximum);
-    }
-
-    private static int MoveToward(int current, int target, int maximumStep)
-    {
-        if (current == target)
-        {
-            return target;
-        }
-
-        var delta = target - current;
-        if (Math.Abs(delta) <= maximumStep)
-        {
-            return target;
-        }
-
-        return current + Math.Sign(delta) * maximumStep;
+        return DawnProtocol.Clamp(value, minimum, maximum);
     }
 
     private delegate IntPtr SubclassProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData);
