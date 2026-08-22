@@ -36,28 +36,28 @@ public sealed class DawnHidDevice
     private const int ErrorInsufficientBuffer = 122;
     private const int HidpStatusSuccess = 0x00110000;
 
+    private readonly object _deviceGate = new();
+
+    /// <summary>
+    /// The resolved control interface, kept between commands. Every command used to re-enumerate
+    /// every HID device on the machine — opening each one, pulling its preparsed data and marshalling
+    /// its caps — which for a single volume keypress is dozens of handle opens and a few kilobytes of
+    /// garbage. Held down, the volume shortcut did that twelve times a second, which is what made the
+    /// resident's memory climb while the volume moved and made each write slow enough that keypresses
+    /// piled up behind it.
+    /// </summary>
+    /// <remarks>
+    /// Any disconnect-shaped failure clears this and the command is retried once against a fresh
+    /// enumeration, so a path invalidated by a replug costs one retry rather than a wrong answer.
+    /// </remarks>
+    private HidDeviceInfo? _device;
+
     public Task<DawnDeviceState?> TryReadStateAsync(CancellationToken cancellationToken = default)
     {
         return Task.Run<DawnDeviceState?>(() =>
         {
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var device = TryOpenDawn();
-                if (device is null)
-                {
-                    return null;
-                }
-
-                var stateResponse = SendCommand(device, DawnProtocol.CommandReadState, 0, readBack: true);
-                Thread.Sleep(100);
-                var volumeResponse = SendCommand(device, DawnProtocol.CommandReadVolume, 0, readBack: true);
-                return ParseState(stateResponse, volumeResponse);
-            }
-            catch (Win32Exception ex) when (DawnProtocol.IsDisconnectedWin32Error(ex.NativeErrorCode))
-            {
-                return null;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return WithDevice<DawnDeviceState?>(ReadState, null);
         }, cancellationToken);
     }
 
@@ -67,13 +67,16 @@ public sealed class DawnHidDevice
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var device = OpenDawn();
-            var stateResponse = SendCommand(device, DawnProtocol.CommandReadState, 0, readBack: true);
-            Thread.Sleep(100);
-            var volumeResponse = SendCommand(device, DawnProtocol.CommandReadVolume, 0, readBack: true);
-
-            return ParseState(stateResponse, volumeResponse);
+            return WithDeviceOrThrow(ReadState);
         }, cancellationToken);
+    }
+
+    private static DawnDeviceState ReadState(HidDeviceInfo device)
+    {
+        var stateResponse = SendCommand(device, DawnProtocol.CommandReadState, 0, readBack: true);
+        Thread.Sleep(100);
+        var volumeResponse = SendCommand(device, DawnProtocol.CommandReadVolume, 0, readBack: true);
+        return ParseState(stateResponse, volumeResponse);
     }
 
     private static DawnDeviceState ParseState(CommandResult stateResponse, CommandResult volumeResponse)
@@ -87,7 +90,12 @@ public sealed class DawnHidDevice
         }
 
         var rawVolume = hasVolume ? volumeResponse.Data[5] : (byte)0;
-        var displayVolume = hasVolume ? DawnProtocol.RawToVolume(rawVolume) ?? 0 : -1;
+
+        // A raw byte outside the table is unknown, not zero. It used to fall back to display 0, which
+        // reads as "quietest" but is indistinguishable from a real reading, so callers could not tell
+        // a failed decode from a genuine value. -1 is what every other field here already uses for
+        // "the device did not tell us", and both the GUI and VolumeController check for it.
+        var displayVolume = hasVolume ? DawnProtocol.RawToVolume(rawVolume) ?? -1 : -1;
         return new DawnDeviceState(
             hasState ? stateResponse.Data[4] : -1,
             hasState ? stateResponse.Data[5] : -1,
@@ -137,37 +145,128 @@ public sealed class DawnHidDevice
         return TrySendWriteAsync(DawnProtocol.CommandVolume, DawnProtocol.VolumeToRaw(displayVolume), cancellationToken);
     }
 
-    private static Task SendWriteAsync(byte command, int value, CancellationToken cancellationToken)
+    private Task SendWriteAsync(byte command, int value, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var device = OpenDawn();
-            SendCommand(device, command, (byte)value, readBack: false);
+            WithDeviceOrThrow(device =>
+            {
+                SendCommand(device, command, (byte)value, readBack: false);
+                return true;
+            });
         }, cancellationToken);
     }
 
-    private static Task<bool> TrySendWriteAsync(byte command, int value, CancellationToken cancellationToken)
+    private Task<bool> TrySendWriteAsync(byte command, int value, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            return WithDevice(
+                device =>
+                {
+                    SendCommand(device, command, (byte)value, readBack: false);
+                    return true;
+                },
+                false);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> against the cached interface, and on a disconnect-shaped error
+    /// drops the cache and tries once more against a fresh enumeration. Returns
+    /// <paramref name="failure"/> when there is no device to talk to.
+    /// </summary>
+    /// <remarks>
+    /// The retry is what makes caching safe: a cached path that died with the last unplug fails at
+    /// <c>CreateFileW</c> with one of the disconnect codes, and the second attempt sees the current
+    /// device list. Without it the first keypress after a replug would be swallowed.
+    /// </remarks>
+    private T WithDevice<T>(Func<HidDeviceInfo, T> action, T failure)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var device = ResolveDevice();
+            if (device is null)
+            {
+                return failure;
+            }
+
             try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var device = TryOpenDawn();
-                if (device is null)
-                {
-                    return false;
-                }
-
-                SendCommand(device, command, (byte)value, readBack: false);
-                return true;
+                return action(device);
             }
             catch (Win32Exception ex) when (DawnProtocol.IsDisconnectedWin32Error(ex.NativeErrorCode))
             {
-                return false;
+                InvalidateDevice(device);
             }
-        }, cancellationToken);
+        }
+
+        return failure;
+    }
+
+    /// <summary>
+    /// The throwing counterpart of <see cref="WithDevice{T}"/>, for the callers whose failures the GUI
+    /// reports to the user. Same one retry after a disconnect-shaped error; if the second attempt fails
+    /// too, the exception is left to propagate.
+    /// </summary>
+    private T WithDeviceOrThrow<T>(Func<HidDeviceInfo, T> action)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var device = ResolveDevice()
+                ?? throw new FileNotFoundException("Dawn 4.4 HID interface was not found.");
+
+            try
+            {
+                return action(device);
+            }
+            catch (Win32Exception ex)
+                when (attempt == 0 && DawnProtocol.IsDisconnectedWin32Error(ex.NativeErrorCode))
+            {
+                InvalidateDevice(device);
+            }
+        }
+    }
+
+    private HidDeviceInfo? ResolveDevice()
+    {
+        lock (_deviceGate)
+        {
+            _device ??= FindDawn();
+            return _device;
+        }
+    }
+
+    /// <summary>
+    /// Only clears the cache when it still holds the interface that failed, so a concurrent caller
+    /// that has already re-resolved does not lose its fresh answer.
+    /// </summary>
+    private void InvalidateDevice(HidDeviceInfo failed)
+    {
+        lock (_deviceGate)
+        {
+            if (ReferenceEquals(_device, failed))
+            {
+                _device = null;
+            }
+        }
+    }
+
+    private static HidDeviceInfo? FindDawn()
+    {
+        var devices = EnumerateHidDevices()
+            .Where(device => device.VendorId == VendorId && device.ProductId == ProductId)
+            .ToList();
+
+        if (devices.Count == 0)
+        {
+            return null;
+        }
+
+        return devices.FirstOrDefault(device => device.Path.Contains("mi_02", StringComparison.OrdinalIgnoreCase))
+            ?? devices[0];
     }
 
     private static CommandResult SendCommand(HidDeviceInfo device, byte command, byte value, bool readBack)
@@ -185,26 +284,6 @@ public sealed class DawnHidDevice
         var responseLength = Math.Max(device.InputReportLength, OutputReportLength);
         var response = ReadResponse(handle, command, responseLength);
         return new CommandResult(device, response);
-    }
-
-    private static HidDeviceInfo? TryOpenDawn()
-    {
-        var devices = EnumerateHidDevices()
-            .Where(device => device.VendorId == VendorId && device.ProductId == ProductId)
-            .ToList();
-
-        if (devices.Count == 0)
-        {
-            return null;
-        }
-
-        return devices.FirstOrDefault(device => device.Path.Contains("mi_02", StringComparison.OrdinalIgnoreCase))
-            ?? devices[0];
-    }
-
-    private static HidDeviceInfo OpenDawn()
-    {
-        return TryOpenDawn() ?? throw new FileNotFoundException("Dawn 4.4 HID interface was not found.");
     }
 
     /// <summary>
