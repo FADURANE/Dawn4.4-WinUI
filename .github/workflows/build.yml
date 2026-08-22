@@ -20,6 +20,8 @@ jobs:
     env:
       PROJECT_PATH: Dawn44.WinUI\Dawn44.WinUI.csproj
       TEST_PROJECT_PATH: Dawn44.Core.Tests\Dawn44.Core.Tests.csproj
+      BACKGROUND_PROJECT_PATH: Dawn44.Background\Dawn44.Background.csproj
+      BACKGROUND_PUBLISH_DIR: Dawn44.Background\bin\Release\net8.0-windows\win-x64\publish
       PUBLISH_DIR: Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged
       INSTALLER_SCRIPT: installer\Dawn44Control.iss
 
@@ -67,6 +69,19 @@ jobs:
             /m `
             /noLogo
 
+      # NativeAOT: the ILC step links with MSVC, which is why this cannot be produced on a machine
+      # without Visual Studio and has to be built here. The result is self-contained, so the single
+      # exe runs with no .NET 8 desktop runtime installed.
+      - name: Publish background exe (NativeAOT x64)
+        shell: pwsh
+        run: |
+          dotnet publish $env:BACKGROUND_PROJECT_PATH `
+            --configuration Release `
+            --runtime win-x64 `
+            --nologo
+          $exe = Get-Item "$env:BACKGROUND_PUBLISH_DIR\Dawn44.Background.exe"
+          "Dawn44.Background.exe on disk: {0:N2} MB" -f ($exe.Length / 1MB)
+
       - name: Archive for release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -109,6 +124,12 @@ jobs:
         with:
           name: Dawn44Control-installer-x64
           path: installer\Output\*.exe
+
+      - name: Upload background exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dawn44Background-x64
+          path: ${{ env.BACKGROUND_PUBLISH_DIR }}\Dawn44.Background.exe
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The headless resident. Everything here exists to keep the process small: WinExe so there is no
+    console window, NativeAOT so there is no CLR and no JIT, net8.0-windows so no CsWinRT projections
+    come along, and invariant globalization so ICU stays out. The measured baseline it has to beat is
+    the tray-only WinUI process at 180.1MB working set / 138.3MB private; the target is 7-12MB.
+
+    AOT is safe for what this executable touches: settings are hand-rolled JsonDocument/Utf8JsonWriter
+    rather than reflection-based serialization, and Process.Start with Verb="runas" and
+    Microsoft.Win32.Registry are both AOT-clean.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Platforms>AnyCPU;x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <RootNamespace>Dawn44.Background</RootNamespace>
+    <AssemblyName>Dawn44.Background</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EventSourceSupport>false</EventSourceSupport>
+    <!--
+      Left on purpose: UseSystemResourceKeys would shrink the binary further but replaces exception
+      messages with bare identifiers, and background.log is the only diagnostic this process has.
+    -->
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dawn44.Core\Dawn44.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -49,6 +49,7 @@ public static class SettingsStore
     public const string StartupEnabledKey = "StartupEnabled";
     public const string HotkeyOsdEnabledKey = "HotkeyOsdEnabled";
     public const string RunAsAdminKey = "RunAsAdmin";
+    public const string ModeKey = "Mode";
 
     public static readonly string SettingsDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -97,6 +98,28 @@ public static class SettingsStore
     public static void SaveRunAsAdmin(bool enabled)
     {
         SaveSetting(RunAsAdminKey, enabled ? "true" : "false");
+    }
+
+    /// <summary>
+    /// Which executable the user wants resident. Read by both of them on startup, and by the startup
+    /// registration, which has to point at the matching exe.
+    /// </summary>
+    public static AppMode GetMode()
+    {
+        return ParseMode(GetStringSetting(ModeKey, null));
+    }
+
+    public static void SaveMode(AppMode mode)
+    {
+        SaveSetting(ModeKey, mode == AppMode.Background ? "Background" : "Gui");
+    }
+
+    /// <summary>Anything unrecognised falls back to the GUI, which is the mode that can fix itself.</summary>
+    public static AppMode ParseMode(string? value)
+    {
+        return string.Equals(value, "Background", StringComparison.OrdinalIgnoreCase)
+            ? AppMode.Background
+            : AppMode.Gui;
     }
 
     public static bool GetResizeLocked()
