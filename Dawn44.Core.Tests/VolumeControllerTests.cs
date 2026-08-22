@@ -11,9 +11,10 @@ public class VolumeControllerTests
 {
     [Theory]
     [InlineData(30, 30)]   // unchanged
-    [InlineData(30, 28)]   // moved by the tolerance
+    [InlineData(30, 28)]   // moved by exactly the tolerance
     [InlineData(30, 32)]
     [InlineData(30, 31)]
+    [InlineData(58, 60)]   // a real step near the top of the range is not a jump
     public void ReadingNeedsCorroboration_TrustsAReadingNearTheLastKnownValue(int lastKnown, int reading)
     {
         Assert.False(VolumeController.ReadingNeedsCorroboration(lastKnown, reading));
@@ -26,7 +27,7 @@ public class VolumeControllerTests
     [InlineData(30, 0)]
     [InlineData(30, 27)]
     [InlineData(30, 33)]
-    [InlineData(58, 60)]
+    [InlineData(50, 60)]
     public void ReadingNeedsCorroboration_DistrustsAJump(int lastKnown, int reading)
     {
         Assert.True(VolumeController.ReadingNeedsCorroboration(lastKnown, reading));
