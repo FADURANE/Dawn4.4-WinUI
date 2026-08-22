@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The protocol and settings logic is covered here so the Core extraction can be verified without a
+    Dawn 4.4 attached. Nothing in this project touches the real %LOCALAPPDATA% settings file or the
+    registry; only the pure helpers are exercised, reached through InternalsVisibleTo.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Platforms>AnyCPU;x86;x64;ARM64</Platforms>
+    <RootNamespace>Dawn44.Core.Tests</RootNamespace>
+    <AssemblyName>Dawn44.Core.Tests</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dawn44.Core\Dawn44.Core.csproj" />
+  </ItemGroup>
+
+</Project>

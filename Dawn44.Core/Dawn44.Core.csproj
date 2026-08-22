@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately net8.0-windows and NOT net8.0-windows10.0.19041.0. The versioned TFM pulls in
+    the CsWinRT projections, which would inflate the NativeAOT background executable that also
+    references this library and can break its publish outright. Nothing in here needs WinRT:
+    settings live in %LOCALAPPDATA% rather than ApplicationData for exactly this reason.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Platforms>AnyCPU;x86;x64;ARM64</Platforms>
+    <RootNamespace>Dawn44.Core</RootNamespace>
+    <AssemblyName>Dawn44.Core</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Dawn44.Core.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

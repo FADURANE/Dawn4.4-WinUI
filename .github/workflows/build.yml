@@ -19,6 +19,7 @@ jobs:
 
     env:
       PROJECT_PATH: Dawn44.WinUI\Dawn44.WinUI.csproj
+      TEST_PROJECT_PATH: Dawn44.Core.Tests\Dawn44.Core.Tests.csproj
       PUBLISH_DIR: Dawn44.WinUI\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish-unpackaged
       INSTALLER_SCRIPT: installer\Dawn44Control.iss
 
@@ -33,6 +34,15 @@ jobs:
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+
+      # Runs before the app build so a protocol or settings regression fails fast. These tests are
+      # pure: no HID device, no registry, no %LOCALAPPDATA% access.
+      - name: Test Dawn44.Core
+        shell: pwsh
+        run: |
+          dotnet test $env:TEST_PROJECT_PATH `
+            --configuration Release `
+            --nologo
 
       - name: Restore
         shell: pwsh
