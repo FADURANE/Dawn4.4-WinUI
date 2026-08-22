@@ -941,11 +941,19 @@ public sealed partial class MainWindow : Window
             AppendMenu(menu, MfString, TrayMenuFilterBase + 4, Text("FilterNos"));
             AppendMenu(menu, MfSeparator, 0, string.Empty);
             AppendMenu(menu, MfString | MfDisabled, 0, Text("TrayModeTitle"));
-            var mode = SettingsStore.GetMode();
-            AppendMenu(menu, MfString | (mode == AppMode.Gui ? MfChecked : 0u), TrayMenuModeGui, Text("ModeGui"));
+
+            // This menu only exists in the GUI process, so the window is always the mode running right
+            // now and is labelled as such. The check mark answers the other question — which executable
+            // the next logon starts — because that is the only one the two items can change.
+            var startupMode = SettingsStore.GetMode();
             AppendMenu(
                 menu,
-                MfString | (mode == AppMode.Background ? MfChecked : 0u),
+                MfString | (startupMode == AppMode.Gui ? MfChecked : 0u),
+                TrayMenuModeGui,
+                Text("ModeGui") + Text("ModeCurrentSuffix"));
+            AppendMenu(
+                menu,
+                MfString | (startupMode == AppMode.Background ? MfChecked : 0u),
                 TrayMenuModeBackground,
                 Text("ModeBackground"));
             AppendMenu(menu, MfSeparator, 0, string.Empty);
@@ -1798,9 +1806,10 @@ public sealed partial class MainWindow : Window
             "TrayGainTitle" => zh ? "增益" : "Gain",
             "TrayLedTitle" => zh ? "LED" : "LED",
             "TrayFilterTitle" => zh ? "滤波器" : "Filter",
-            "TrayModeTitle" => zh ? "运行模式" : "Run mode",
+            "TrayModeTitle" => zh ? "启动模式" : "Startup mode",
             "ModeGui" => zh ? "窗口模式" : "Window mode",
             "ModeBackground" => zh ? "后台模式（仅快捷键）" : "Background mode (shortcuts only)",
+            "ModeCurrentSuffix" => zh ? "（当前）" : " (current)",
             "ModeGuiApplied" => zh
                 ? "已设为窗口模式，开机自启将启动此窗口。"
                 : "Window mode set; auto-start will launch this window.",
