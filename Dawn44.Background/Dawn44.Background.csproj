@@ -28,7 +28,29 @@
       messages with bare identifiers, and background.log is the only diagnostic this process has.
     -->
     <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <!--
+      Size over speed: this process wakes every 15ms to read two key states, so nothing here is hot,
+      and a smaller image is a smaller resident working set.
+    -->
+    <OptimizationPreference>Size</OptimizationPreference>
+    <!--
+      Both are already the defaults for a WinExe, stated explicitly because either one flipping would
+      be expensive and invisible: the server GC would commit a heap per core, and the background GC
+      would add a thread plus its own committed budget for a heap that never exceeds a few megabytes.
+    -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Caps the gen0 budget at 2MB. With the poll loop no longer allocating per tick there is almost
+      nothing left to collect, but this bounds any residual idle drift instead of letting the working
+      set coast upward to whatever budget the GC picks from cache size. It has no MSBuild property, so
+      it goes through the runtime config directly.
+    -->
+    <RuntimeHostConfigurationOption Include="System.GC.Gen0Size" Value="2097152" Trim="true" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dawn44.Core\Dawn44.Core.csproj" />
