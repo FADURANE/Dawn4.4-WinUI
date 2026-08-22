@@ -1,6 +1,5 @@
 ﻿using Dawn44.Core;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -15,6 +14,11 @@ using Windows.Storage;
 using Windows.Storage.Streams;
 using Windows.System;
 using WinRT.Interop;
+
+// Windows.System, imported above, carries a DispatcherQueueTimer of its own, so the plain namespace
+// import would make the type name ambiguous. The Window.DispatcherQueue property this timer comes
+// from is the Microsoft.UI one.
+using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace Dawn44.WinUI;
 
